@@ -1,24 +1,62 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
+import { join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 
+function isAllowedCorsOrigin(origin: string): boolean {
+  if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
+  if (/^http:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin)) return true;
+  if (/^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/.test(origin)) return true;
+  const extras =
+    process.env.CORS_ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ??
+    [];
+  if (extras.includes(origin)) return true;
+  try {
+    const u = new URL(origin);
+    const h = u.hostname;
+    if (
+      h.endsWith('.ngrok-free.app') ||
+      h.endsWith('.ngrok-free.dev') ||
+      h.endsWith('.ngrok.io') ||
+      h.endsWith('.ngrok.app')
+    ) {
+      return u.protocol === 'https:';
+    }
+    // Painel no Render (ou outro host em https://*.onrender.com)
+    if (h.endsWith('.onrender.com')) {
+      return u.protocol === 'https:';
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   app.enableCors({
     // Apps móveis costumam não enviar Origin; Flutter web / LAN usam 192.168.x ou 10.x.
+    // Túneis ngrok: browser envia Origin https://*.ngrok-free.app (requer HTTPS).
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
-      if (/^http:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin)) return callback(null, true);
-      if (/^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/.test(origin)) return callback(null, true);
-      return callback(null, false);
+      return callback(null, isAllowedCorsOrigin(origin));
     },
     credentials: true,
   });
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+
+  const uploadsDir = join(process.cwd(), 'uploads');
+  if (!existsSync(uploadsDir)) {
+    mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.useStaticAssets(uploadsDir, { prefix: '/uploads/' });
 
   const config = new DocumentBuilder()
     .setTitle('OX Field Service API')

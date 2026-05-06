@@ -20,7 +20,12 @@ export class PaymentsService {
     private eventEmitter: EventEmitter2,
   ) {}
 
-  async createWorkerStripeAccount(workerId: string) {
+  async createWorkerStripeAccount(workerId: string | undefined) {
+    if (!workerId) {
+      throw new BadRequestException(
+        'Sem perfil de trabalhador nesta sessão. Faça POST /auth/sync com role "worker" ou use a conta correta.',
+      );
+    }
     const worker = await this.prisma.worker.findUnique({
       where: { id: workerId },
       include: { user: true },
@@ -40,7 +45,9 @@ export class PaymentsService {
     refreshUrl: string,
   ) {
     if (!workerId) {
-      throw new BadRequestException('Worker sem conta Stripe. Crie primeiro via POST /payments/worker-account');
+      throw new BadRequestException(
+        'Perfil de trabalhador não encontrado. Faça POST /auth/sync com role "worker".',
+      );
     }
     const worker = await this.prisma.worker.findUnique({ where: { id: workerId } });
     if (!worker?.stripeAccountId) {
@@ -225,7 +232,17 @@ export class PaymentsService {
   // ─── Connect status (worker) ───────────────────────────
 
   async getWorkerAccountStatus(workerId: string | undefined) {
-    if (!workerId) throw new NotFoundException('Worker não encontrado');
+    if (!workerId) {
+      return {
+        status: 'not_started' as const,
+        stripeAccountId: null,
+        detailsSubmitted: false,
+        chargesEnabled: false,
+        payoutsEnabled: false,
+        requirements: { currentlyDue: [], pastDue: [], disabledReason: null },
+        bankAccount: null,
+      };
+    }
     const worker = await this.prisma.worker.findUnique({ where: { id: workerId } });
     if (!worker) throw new NotFoundException('Worker não encontrado');
 

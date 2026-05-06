@@ -17,6 +17,9 @@ FROM node:20-alpine AS production
 RUN addgroup -g 1001 -S oxgroup && \
     adduser -S oxuser -u 1001 -G oxgroup
 
+# HEALTHCHECK uses scripts/healthcheck.sh → curl
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
 COPY --from=builder --chown=oxuser:oxgroup /app/node_modules ./node_modules

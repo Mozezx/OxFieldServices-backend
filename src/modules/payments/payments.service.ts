@@ -58,7 +58,9 @@ export class PaymentsService {
    * Página HTML após redirect do Stripe (link público; browser do worker sem JWT).
    */
   getStripeConnectLandingHtml(kind: 'done' | 'refresh'): string {
-    const deepLink = process.env.STRIPE_CONNECT_APP_DEEP_LINK?.trim() ?? '';
+    const deepLink =
+      process.env.STRIPE_CONNECT_APP_DEEP_LINK?.trim() ||
+      'io.oxapp.worker://connect-return';
     const esc = (s: string) =>
       s
         .replace(/&/g, '&amp;')
@@ -73,12 +75,12 @@ export class PaymentsService {
       kind === 'refresh'
         ? 'Este link expirou. Volte ao aplicativo OX Trabalhador e abra novamente a verificação da conta.'
         : 'Concluído. Volte ao aplicativo OX Trabalhador para ver o estado atualizado.';
-    const openApp =
-      deepLink !== ''
-        ? `<p style="margin-top:1.5rem"><a href="${esc(deepLink)}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">Abrir aplicativo OX</a></p>`
-        : '';
+    /** Redireciona para o app (custom scheme) assim que a página abre; fallback: botão manual. */
+    const deepLinkJson = JSON.stringify(deepLink);
+    const autoRedirect = `<meta http-equiv="refresh" content="0;url=${esc(deepLink)}"/><script>setTimeout(function(){try{location.replace(${deepLinkJson});}catch(e){}},150);</script>`;
+    const openApp = `<p style="margin-top:1.5rem"><a href="${esc(deepLink)}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">Abrir aplicativo OX</a></p>`;
 
-    return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${esc(title)}</title></head><body style="font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111"><h1 style="font-size:1.125rem">${esc(headline)}</h1>${openApp}<p style="margin-top:1rem;font-size:0.875rem;color:#555">Pode fechar esta aba.</p></body></html>`;
+    return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${esc(title)}</title>${autoRedirect}</head><body style="font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111"><h1 style="font-size:1.125rem">${esc(headline)}</h1>${openApp}<p style="margin-top:1rem;font-size:0.875rem;color:#555">Pode fechar esta aba.</p></body></html>`;
   }
 
   async createEscrow(contractId: string, userId?: string) {

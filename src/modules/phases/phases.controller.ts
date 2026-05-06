@@ -71,7 +71,7 @@ export class PhasesController {
     @Req() req: any,
     @Body() dto: ValidatePhaseDto,
   ) {
-    return this.phasesService.validatePhase(id, dto.approved, req.user.id);
+    return this.phasesService.validatePhase(id, dto.approved, req.user.id, dto.reason);
   }
 
   // ─── Evidências ────────────────────────────────────────
@@ -88,13 +88,13 @@ export class PhasesController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 300 * 1024 * 1024 } }))
   uploadEvidence(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: any,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    return this.evidenceService.upload(id, file, req.user.id);
+    return this.evidenceService.upload(id, file, req.user.id, req);
   }
 
   @Get('phases/:id/evidence')

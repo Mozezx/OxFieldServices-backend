@@ -211,10 +211,11 @@ export class NotificationCopyService {
           if (variant === 'worker') {
             return {
               title: this.t(locale, 'notifPhaseRejectedWorkerTitle'),
-              body: interpolate(
-                this.t(locale, 'notifPhaseRejectedWorkerBody'),
-                { phaseName, projectTitle },
-              ),
+              body:
+                interpolate(
+                  this.t(locale, 'notifPhaseRejectedWorkerBody'),
+                  { phaseName, projectTitle },
+                ) + reason,
             };
           }
           return {

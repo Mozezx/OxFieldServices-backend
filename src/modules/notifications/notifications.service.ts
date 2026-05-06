@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { NotificationType } from '@prisma/client';
+import type { NotificationType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppSyncService } from './app-sync.service';
 import { scopesForNotificationType } from './app-sync.scopes';
@@ -115,6 +115,59 @@ export class NotificationsService {
     await Promise.all(
       unique.map((userId) => this.create({ ...payload, userId })),
     );
+  }
+
+  async sendManual(params: {
+    type: NotificationType;
+    title: string;
+    body: string;
+    userEmail?: string;
+    role?: UserRole;
+    entityType?: string | null;
+    entityId?: string | null;
+  }) {
+    const userIds = await this.resolveManualRecipientUserIds({
+      userEmail: params.userEmail,
+      role: params.role,
+    });
+    await this.createForUsers(userIds, {
+      type: params.type,
+      title: params.title,
+      body: params.body,
+      entityType: params.entityType ?? null,
+      entityId: params.entityId ?? null,
+    });
+    return { sent: userIds.length };
+  }
+
+  private async resolveManualRecipientUserIds(params: {
+    userEmail?: string;
+    role?: UserRole;
+  }): Promise<string[]> {
+    const email = params.userEmail?.trim().toLowerCase();
+    if (email) {
+      const user = await this.prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      if (!user) {
+        throw new BadRequestException(`Utilizador com email '${email}' não encontrado.`);
+      }
+      return [user.id];
+    }
+
+    if (!params.role) {
+      throw new BadRequestException('Informe userEmail ou role para definir o destinatário.');
+    }
+
+    const users = await this.prisma.user.findMany({
+      where: { role: params.role },
+      select: { id: true },
+    });
+    if (users.length === 0) {
+      throw new BadRequestException(`Nenhum utilizador encontrado para role '${params.role}'.`);
+    }
+    return users.map((u) => u.id);
   }
 
   async listForUser(params: {

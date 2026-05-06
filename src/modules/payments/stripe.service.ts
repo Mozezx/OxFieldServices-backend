@@ -15,12 +15,18 @@ export class StripeService {
 
   /** Mesma moeda em PaymentIntent + transfers; default EUR (use STRIPE_CHARGE_CURRENCY=brl para Connect Brasil). */
   readonly chargeCurrency: string;
+  /** Valor mínimo (em centavos) aceito para criar PaymentIntent. */
+  readonly minimumChargeAmountCents: number;
 
   constructor(private prisma: PrismaService) {
     this.client = new Stripe(process.env.STRIPE_SECRET_KEY!);
     this.chargeCurrency = (
       process.env.STRIPE_CHARGE_CURRENCY ?? 'eur'
     ).toLowerCase();
+    this.minimumChargeAmountCents = Math.max(
+      1,
+      Number(process.env.STRIPE_MIN_CHARGE_AMOUNT_CENTS ?? '50'),
+    );
   }
 
   async createWorkerAccount(workerId: string, email: string) {

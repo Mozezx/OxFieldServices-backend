@@ -89,8 +89,7 @@ export class PhasesService {
    * Atualiza o status de uma fase.
    * Regras de transição entre status de fase:
    *   pending → in_progress (quando worker inicia)
-   *   in_progress → evidence_uploaded (quando worker envia evidências)
-   *   evidence_uploaded → under_review (automático ou admin)
+   *   in_progress|rejected|evidence_uploaded → under_review (quando worker envia para revisão)
    *   under_review → validated | rejected (cliente/admin valida)
    *   rejected → in_progress (worker corrige)
    */
@@ -114,6 +113,13 @@ export class PhasesService {
 
     const { status: newStatus } = dto;
     const currentStatus = phase.status;
+
+    if (currentStatus === newStatus) {
+      return {
+        ...phase,
+        amount: Number(phase.amount),
+      };
+    }
 
     // Validar transição de fase
     if (!this.isValidPhaseTransition(currentStatus, newStatus)) {
@@ -200,7 +206,7 @@ export class PhasesService {
     if (currentStatus === 'pending' && newStatus === 'in_progress') {
       this.eventEmitter.emit('phase.started', { phaseId: id });
     }
-    if (currentStatus === 'evidence_uploaded' && newStatus === 'under_review') {
+    if (newStatus === 'under_review') {
       this.eventEmitter.emit('phase.under_review', { phaseId: id });
     }
 
@@ -213,8 +219,14 @@ export class PhasesService {
   /**
    * Endpoint dedicado de validação pelo cliente.
    * Aprovação emite evento phase.validated → handler libera pagamento.
+   * Rejeição com reason salva reworkReason e emite phase.rejected.
    */
-  async validatePhase(phaseId: string, approved: boolean, userId: string) {
+  async validatePhase(
+    phaseId: string,
+    approved: boolean,
+    userId: string,
+    reason?: string,
+  ) {
     const phase = await this.prisma.projectPhase.findUnique({
       where: { id: phaseId },
       include: { project: true, evidences: true },
@@ -235,9 +247,12 @@ export class PhasesService {
       throw new BadRequestException('Sem evidências para validar');
     }
 
+    const alreadyRejected = phase.status === 'rejected';
+
     if (
       phase.status !== 'under_review' &&
-      phase.status !== 'evidence_uploaded'
+      phase.status !== 'evidence_uploaded' &&
+      !alreadyRejected
     ) {
       this.logger.warn(
         `Tentativa de validar fase ${phaseId} com status inválido: ${phase.status}`,
@@ -247,21 +262,34 @@ export class PhasesService {
       );
     }
 
+    // Fase já rejeitada: admin pode atualizar o motivo sem reemitir evento de pagamento
+    if (alreadyRejected && approved) {
+      throw new BadRequestException(
+        'Não é possível aprovar uma fase já rejeitada. O worker precisa reenviar evidências primeiro.',
+      );
+    }
+
     const newStatus: PhaseStatus = approved ? 'validated' : 'rejected';
 
     this.logger.log(
-      `Fase ${phaseId} ${approved ? 'aprovada' : 'rejeitada'} por usuário ${userId}`,
+      `Fase ${phaseId} ${approved ? 'aprovada' : 'retrabalho solicitado'} por usuário ${userId}`,
     );
 
     const updated = await this.prisma.projectPhase.update({
       where: { id: phaseId },
-      data: { status: newStatus },
+      data: {
+        status: newStatus,
+        reworkReason: approved ? null : (reason ?? null),
+      },
     });
 
     if (approved) {
       this.eventEmitter.emit('phase.validated', { phaseId });
     } else {
-      this.eventEmitter.emit('phase.rejected', { phaseId });
+      // Evita notificação duplicada se a fase já estava rejeitada e só o motivo foi atualizado
+      if (!alreadyRejected) {
+        this.eventEmitter.emit('phase.rejected', { phaseId, reason });
+      }
     }
 
     return { ...updated, amount: Number(updated.amount) };
@@ -275,11 +303,11 @@ export class PhasesService {
   ): boolean {
     const transitions: Record<PhaseStatus, PhaseStatus[]> = {
       pending: ['in_progress'],
-      in_progress: ['evidence_uploaded'],
+      in_progress: ['under_review'],
       evidence_uploaded: ['under_review'],
       under_review: ['validated', 'rejected'],
       validated: [],
-      rejected: ['in_progress'],
+      rejected: ['in_progress', 'under_review'],
     };
 
     return transitions[current]?.includes(next) ?? false;

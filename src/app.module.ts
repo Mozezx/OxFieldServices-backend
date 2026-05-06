@@ -16,6 +16,7 @@ import { UsersModule } from './modules/users/users.module';
 import { SkillsModule } from './modules/skills/skills.module';
 import { InvitesModule } from './modules/invites/invites.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { ToolsModule } from './modules/tools/tools.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { AdminModule } from './modules/admin/admin.module';
     SkillsModule,
     InvitesModule,
     AdminModule,
+    ToolsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

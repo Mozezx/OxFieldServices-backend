@@ -268,7 +268,7 @@ export class NotificationsListeners {
   }
 
   @OnEvent('phase.rejected')
-  async onPhaseRejected(payload: { phaseId: string }) {
+  async onPhaseRejected(payload: { phaseId: string; reason?: string }) {
     try {
       const phase = await this.prisma.projectPhase.findUnique({
         where: { id: payload.phaseId },
@@ -292,27 +292,28 @@ export class NotificationsListeners {
       if (!phase) return;
 
       const workerUserId = phase.project.contract?.worker?.user?.id;
+      const reasonSuffix = payload.reason ? ` Motivo: "${payload.reason}".` : '';
 
       if (workerUserId) {
         await this.notifications.create({
           userId: workerUserId,
           type: 'phase_rejected',
-          title: 'Fase rejeitada',
-          body: `A fase ${phase.name} do projeto ${phase.project.title} foi rejeitada e precisa de ajustes.`,
+          title: 'Retrabalho solicitado',
+          body: `A fase ${phase.name} do projeto ${phase.project.title} precisa de ajustes.${reasonSuffix}`,
           entityType: 'phase',
           entityId: payload.phaseId,
-          data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, variant: 'worker' },
+          data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, reason: payload.reason ?? null, variant: 'worker' },
         });
       }
 
       await this.notifications.create({
         userId: phase.project.clientId,
         type: 'phase_rejected',
-        title: 'Rejeição registrada',
-        body: `A fase ${phase.name} foi marcada como rejeitada no projeto ${phase.project.title}.`,
+        title: 'Retrabalho registrado',
+        body: `Retrabalho solicitado para a fase ${phase.name} no projeto ${phase.project.title}.`,
         entityType: 'phase',
         entityId: payload.phaseId,
-        data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title },
+        data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, reason: payload.reason ?? null },
       });
     } catch (e) {
       this.logger.warn(`phase.rejected notification: ${String(e)}`);

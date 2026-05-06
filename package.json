@@ -19,7 +19,13 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:wipe:keep-admin": "node scripts/wipe-data-keep-admin.mjs",
-    "db:create-admin": "node scripts/create-admin-user.mjs"
+    "db:create-admin": "node scripts/create-admin-user.mjs",
+    "db:seed:tools": "node scripts/seed-tools.mjs",
+    "db:upload-tool-images": "node scripts/upload-tool-seed-images.mjs",
+    "db:seed": "prisma db seed"
+  },
+  "prisma": {
+    "seed": "node scripts/seed-tools.mjs"
   },
   "dependencies": {
     "@nestjs/bull": "^11.0.4",

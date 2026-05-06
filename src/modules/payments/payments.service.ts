@@ -153,6 +153,11 @@ export class PaymentsService {
     }
 
     const amountCents = Math.round(Number(contract.totalAmount) * 100);
+    if (amountCents < this.stripeService.minimumChargeAmountCents) {
+      throw new BadRequestException(
+        `Valor do contrato abaixo do mínimo para cobrança (${this.stripeService.minimumChargeAmountCents / 100} ${this.stripeService.chargeCurrency.toUpperCase()})`,
+      );
+    }
     const intent = await this.stripeService.createEscrowIntent(
       amountCents,
       contractId,

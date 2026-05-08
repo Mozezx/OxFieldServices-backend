@@ -155,7 +155,15 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# Wildcards: ver https://supabase.com/docs/guides/auth/redirect-urls — padrões como https://*.ngrok-free.dev/**
+# ox-admin dev corre na porta 3001; ngrok do painel precisa estar aqui para CORS / Origin no browser.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "https://modally-disprovable-aniyah.ngrok-free.dev/**",
+  "https://*.ngrok-free.dev/**",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.

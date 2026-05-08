@@ -1422,6 +1422,8 @@ export class ProjectsService {
       select: {
         title: true,
         status: true,
+        location: true,
+        createdAt: true,
         organization: { select: { name: true, logoUrl: true } },
         client: { select: { name: true } },
         phases: {
@@ -1471,6 +1473,8 @@ export class ProjectsService {
     return {
       title: project.title,
       status: project.status,
+      location: project.location ?? null,
+      createdAt: project.createdAt.toISOString(),
       organizationName: project.organization?.name ?? null,
       organizationLogo: project.organization?.logoUrl ?? null,
       clientDisplayName,

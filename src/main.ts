@@ -18,6 +18,10 @@ function isAllowedCorsOrigin(origin: string): boolean {
   try {
     const u = new URL(origin);
     const h = u.hostname;
+    // Painel / portal em produção (HTTPS no mesmo domínio registado)
+    if (u.protocol === 'https:' && /\.oxfieldservices\.org$/i.test(h)) {
+      return true;
+    }
     if (
       h.endsWith('.ngrok-free.app') ||
       h.endsWith('.ngrok-free.dev') ||

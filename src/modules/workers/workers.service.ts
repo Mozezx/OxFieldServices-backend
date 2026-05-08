@@ -3,8 +3,10 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
+import { UpdateWorkerLocationDto } from './dto/update-worker-location.dto';
 
 @Injectable()
 export class WorkersService {
@@ -30,9 +32,11 @@ export class WorkersService {
     const worker = await this.prisma.worker.findUnique({ where: { userId } });
     if (!worker) throw new NotFoundException('Perfil de worker não encontrado');
 
+    const { accessTier: _ignoredAccessTier, ...data } = dto;
+
     const updated = await this.prisma.worker.update({
       where: { userId },
-      data: dto,
+      data,
       include: {
         user: {
           select: { id: true, name: true, email: true, phone: true, avatarUrl: true },
@@ -56,6 +60,24 @@ export class WorkersService {
         include: {
           user: {
             select: { id: true, name: true, email: true, avatarUrl: true },
+          },
+          _count: {
+            select: {
+              assignments: {
+                where: {
+                  removedAt: null,
+                  project: {
+                    status: {
+                      notIn: [
+                        ProjectStatus.draft,
+                        ProjectStatus.closed,
+                        ProjectStatus.rejected,
+                      ],
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       }),
@@ -96,6 +118,60 @@ export class WorkersService {
     if (!worker) throw new NotFoundException('Worker não encontrado');
 
     return this.formatWorker(worker);
+  }
+
+  async updateMyLocation(userId: string, dto: UpdateWorkerLocationDto) {
+    const worker = await this.prisma.worker.findUnique({ where: { userId } });
+    if (!worker) throw new NotFoundException('Perfil de worker não encontrado');
+
+    return this.prisma.workerLocation.upsert({
+      where: { workerId: worker.id },
+      create: {
+        workerId: worker.id,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        accuracy: dto.accuracy,
+        capturedAt: new Date(),
+      },
+      update: {
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        accuracy: dto.accuracy,
+        capturedAt: new Date(),
+      },
+    });
+  }
+
+  async listWorkersWithLocations(params: { available?: boolean; recentMinutes?: number }) {
+    const where: any = {
+      location: {
+        isNot: null,
+      },
+    };
+
+    if (params.available !== undefined) where.available = params.available;
+    if (params.recentMinutes) {
+      where.location = {
+        is: {
+          capturedAt: {
+            gte: new Date(Date.now() - params.recentMinutes * 60 * 1000),
+          },
+        },
+      };
+    }
+
+    const workers = await this.prisma.worker.findMany({
+      where,
+      orderBy: { rating: 'desc' },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true, avatarUrl: true },
+        },
+        location: true,
+      },
+    });
+
+    return workers.map((worker) => this.formatWorker(worker));
   }
 
   async assertWorkerRole(userId: string) {

@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
+import { ToolCheckoutStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -15,10 +16,19 @@ import { UpdateToolDto } from './dto/update-tool.dto';
 const TOOL_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const MAX_TOOL_IMAGE_BYTES = 5 * 1024 * 1024;
 
+/** Checkout ainda “fora do armazém”: com o worker ou aguardando confirmação de devolução. */
+const ACTIVE_TOOL_CHECKOUT_STATUSES: ToolCheckoutStatus[] = [
+  ToolCheckoutStatus.CHECKED_OUT,
+  ToolCheckoutStatus.RETURN_PENDING,
+];
+
 const toolListInclude = {
   category: true,
   checkouts: {
-    where: { status: 'CHECKED_OUT' as const },
+    where: {
+      status: { in: ACTIVE_TOOL_CHECKOUT_STATUSES },
+    },
+    orderBy: { checkedOutAt: 'desc' as const },
     take: 1,
     include: {
       worker: {
@@ -28,7 +38,7 @@ const toolListInclude = {
       },
     },
   },
-} as const;
+};
 
 @Injectable()
 export class ToolsService {
@@ -155,7 +165,7 @@ export class ToolsService {
     if (!existing) throw new NotFoundException('Ferramenta não encontrada');
 
     const active = await this.prisma.toolCheckout.findFirst({
-      where: { toolId: id, status: 'CHECKED_OUT' },
+      where: { toolId: id, status: { in: ACTIVE_TOOL_CHECKOUT_STATUSES } },
     });
     if (active) {
       throw new ConflictException(
@@ -173,7 +183,7 @@ export class ToolsService {
   async listActiveCheckoutsForRole(userId: string, role: string) {
     if (role === 'admin') {
       return this.prisma.toolCheckout.findMany({
-        where: { status: 'CHECKED_OUT' },
+        where: { status: { in: ACTIVE_TOOL_CHECKOUT_STATUSES } },
         orderBy: { checkedOutAt: 'desc' },
         include: {
           tool: { include: { category: true } },
@@ -191,7 +201,10 @@ export class ToolsService {
       if (!worker) throw new NotFoundException('Perfil de worker não encontrado');
 
       return this.prisma.toolCheckout.findMany({
-        where: { status: 'CHECKED_OUT', workerId: worker.id },
+        where: {
+          workerId: worker.id,
+          status: { in: ACTIVE_TOOL_CHECKOUT_STATUSES },
+        },
         orderBy: { checkedOutAt: 'desc' },
         include: {
           tool: { include: { category: true } },
@@ -229,20 +242,18 @@ export class ToolsService {
     if (!worker) throw new NotFoundException('Perfil de worker não encontrado');
 
     const activeOnTool = await this.prisma.toolCheckout.findFirst({
-      where: { toolId, status: 'CHECKED_OUT' },
+      where: { toolId, status: { in: ACTIVE_TOOL_CHECKOUT_STATUSES } },
     });
     if (activeOnTool) {
       if (activeOnTool.workerId === worker.id) {
+        if (activeOnTool.status === 'RETURN_PENDING') {
+          throw new ConflictException(
+            'Já solicitaste a devolução desta ferramenta. Aguarde a confirmação do administrador.',
+          );
+        }
         throw new ConflictException('Você já possui esta ferramenta em checkout.');
       }
-      throw new ConflictException('Esta ferramenta já está em uso por outro worker.');
-    }
-
-    const myDup = await this.prisma.toolCheckout.findFirst({
-      where: { toolId, workerId: worker.id, status: 'CHECKED_OUT' },
-    });
-    if (myDup) {
-      throw new ConflictException('Você já possui esta ferramenta em checkout.');
+      throw new ConflictException('Esta ferramenta já está em uso ou aguarda confirmação de devolução.');
     }
 
     return this.prisma.toolCheckout.create({
@@ -262,9 +273,27 @@ export class ToolsService {
     });
   }
 
+  /** Worker: pedido de devolução (admin confirma a receção depois). Idempotente se já RETURN_PENDING. */
   async returnTool(toolId: string, userId: string) {
     const worker = await this.prisma.worker.findUnique({ where: { userId } });
     if (!worker) throw new NotFoundException('Perfil de worker não encontrado');
+
+    const pending = await this.prisma.toolCheckout.findFirst({
+      where: { toolId, workerId: worker.id, status: 'RETURN_PENDING' },
+    });
+    if (pending) {
+      return this.prisma.toolCheckout.findUniqueOrThrow({
+        where: { id: pending.id },
+        include: {
+          tool: { include: { category: true } },
+          worker: {
+            include: {
+              user: { select: { id: true, name: true, email: true } },
+            },
+          },
+        },
+      });
+    }
 
     const active = await this.prisma.toolCheckout.findFirst({
       where: { toolId, status: 'CHECKED_OUT', workerId: worker.id },
@@ -275,8 +304,38 @@ export class ToolsService {
       );
     }
 
+    const now = new Date();
     return this.prisma.toolCheckout.update({
       where: { id: active.id },
+      data: {
+        status: 'RETURN_PENDING',
+        returnRequestedAt: now,
+      },
+      include: {
+        tool: { include: { category: true } },
+        worker: {
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+  }
+
+  /** Admin: confirma receção física após pedido do worker. */
+  async confirmReturnCheckout(checkoutId: string) {
+    const row = await this.prisma.toolCheckout.findUnique({
+      where: { id: checkoutId },
+    });
+    if (!row) throw new NotFoundException('Checkout não encontrado');
+    if (row.status !== 'RETURN_PENDING') {
+      throw new BadRequestException(
+        'Só é possível confirmar devoluções com pedido pendente (RETURN_PENDING).',
+      );
+    }
+
+    return this.prisma.toolCheckout.update({
+      where: { id: checkoutId },
       data: {
         status: 'RETURNED',
         returnedAt: new Date(),
@@ -292,12 +351,16 @@ export class ToolsService {
     });
   }
 
+  /** Admin: encerra checkout sem fluxo normal (com worker ou já pendente). */
   async forceReturnCheckout(checkoutId: string) {
     const row = await this.prisma.toolCheckout.findUnique({
       where: { id: checkoutId },
     });
     if (!row) throw new NotFoundException('Checkout não encontrado');
-    if (row.status !== 'CHECKED_OUT') {
+    if (
+      row.status !== 'CHECKED_OUT' &&
+      row.status !== 'RETURN_PENDING'
+    ) {
       throw new BadRequestException('Este checkout já foi encerrado.');
     }
 

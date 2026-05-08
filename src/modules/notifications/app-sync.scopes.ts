@@ -33,6 +33,8 @@ export function scopesForNotificationType(type: NotificationType): string[] {
     case 'phase_under_review':
     case 'phase_validated':
     case 'phase_rejected':
+    case 'phase_client_commented':
+    case 'evidence_commented':
       return uniq([
         ...notifications,
         'projects',
@@ -62,6 +64,8 @@ export function scopesForNotificationType(type: NotificationType): string[] {
 
     case 'worker_invited':
     case 'worker_assigned':
+    case 'worker_assigned_to_project':
+    case 'worker_removed_from_project':
       return uniq([...notifications, 'jobs', 'projects', 'execution']);
 
     case 'worker_rated':

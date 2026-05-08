@@ -16,15 +16,40 @@ export class SupabaseStrategy extends PassportStrategy(Strategy, 'supabase') {
   constructor(private prisma: PrismaService) {
     const supabaseUrl = process.env.SUPABASE_URL;
     if (!supabaseUrl) throw new Error('SUPABASE_URL não definido no .env');
+    const localJwtSecret = process.env.SUPABASE_JWT_SECRET;
+    const jwksProvider = passportJwtSecret({
+      jwksUri: `${supabaseUrl}/auth/v1/.well-known/jwks.json`,
+      cache: true,
+      rateLimit: true,
+    });
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKeyProvider: passportJwtSecret({
-        jwksUri: `${supabaseUrl}/auth/v1/.well-known/jwks.json`,
-        cache: true,
-        rateLimit: true,
-      }),
-      algorithms: ['ES256', 'RS256'],
+      // Em dev local pode aparecer HS256; em cloud/local recente, ES/RS via JWKS.
+      secretOrKeyProvider: (req, rawJwtToken, done) => {
+        const alg = this.readJwtAlg(rawJwtToken);
+        if (alg === 'HS256' && localJwtSecret) {
+          done(null, localJwtSecret);
+          return;
+        }
+        jwksProvider(req, rawJwtToken, done);
+      },
+      algorithms: ['HS256', 'ES256', 'RS256'],
     });
+  }
+
+  private readJwtAlg(rawJwtToken: string): string | null {
+    try {
+      const [headerB64] = rawJwtToken.split('.');
+      if (!headerB64) return null;
+      const normalized = headerB64.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+      const json = Buffer.from(normalized + pad, 'base64').toString('utf8');
+      const header = JSON.parse(json) as { alg?: string };
+      return header.alg ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async validate(payload: SupabaseJwtPayload) {

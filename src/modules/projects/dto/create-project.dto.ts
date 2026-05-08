@@ -2,6 +2,22 @@ import { IsString, IsOptional, IsNumber, IsDateString, IsArray, ValidateNested, 
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+export class CreatePhaseChecklistItemDto {
+  @ApiProperty({ description: 'Texto do item de checklist' })
+  @IsString()
+  label: string;
+
+  @ApiPropertyOptional({ description: 'Se recomenda evidência fotográfica' })
+  @IsOptional()
+  requiresPhoto?: boolean;
+
+  @ApiPropertyOptional({ description: 'Ordem do item no checklist' })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  order?: number;
+}
+
 export class CreatePhaseDto {
   @ApiProperty({ description: 'Nome da fase' })
   @IsString()
@@ -16,6 +32,16 @@ export class CreatePhaseDto {
   @IsNumber()
   @Min(0)
   amount: number;
+
+  @ApiPropertyOptional({
+    description: 'Checklist da fase',
+    type: [CreatePhaseChecklistItemDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreatePhaseChecklistItemDto)
+  checklist?: CreatePhaseChecklistItemDto[];
 }
 
 export class CreateProjectDto {
@@ -63,4 +89,12 @@ export class CreateProjectDto {
   @ValidateNested({ each: true })
   @Type(() => CreatePhaseDto)
   phases?: CreatePhaseDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Template de projeto a aplicar (mesma organização do utilizador). Cria as fases e checklists automaticamente.',
+  })
+  @IsOptional()
+  @IsUUID()
+  templateId?: string;
 }

@@ -7,6 +7,7 @@ import {
   Param,
   Body,
   Req,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -26,7 +27,10 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { PhasesService } from './phases.service';
 import { EvidenceService } from './evidence.service';
 import { UpdatePhaseStatusDto } from './dto/update-phase-status.dto';
-import { ValidatePhaseDto } from './dto/validate-phase.dto';
+import { UpdatePhaseDto } from './dto/update-phase.dto';
+import { EvidenceGpsDto } from './dto/evidence-gps.dto';
+import { UpdateAnnotationsDto } from './dto/update-annotations.dto';
+import { CreateEvidenceCommentDto } from './dto/create-evidence-comment.dto';
 
 @ApiTags('Phases')
 @ApiBearerAuth()
@@ -41,8 +45,41 @@ export class PhasesController {
   @Get('projects/:projectId/phases')
   @Roles('client', 'worker', 'admin')
   @ApiOperation({ summary: 'Listar fases de um projeto' })
-  findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    return this.phasesService.findByProject(projectId);
+  findByProject(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query('assignedToMe') assignedToMe: string | undefined,
+    @Req() req: { user?: { id?: string; role?: string } },
+  ) {
+    const filterForWorker = assignedToMe === 'true' && req.user?.role === 'worker';
+    return this.phasesService.findByProject(projectId, {
+      assignedToMe: filterForWorker,
+      appUserId: filterForWorker ? req.user?.id : undefined,
+    });
+  }
+
+  @Post('projects/:projectId/phases')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Adicionar fase a projeto existente (admin)' })
+  addPhase(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() dto: { name: string; order?: number; amount: number; checklist?: { label: string; requiresPhoto?: boolean; order?: number }[] },
+  ) {
+    return this.phasesService.addPhaseToProject(projectId, dto);
+  }
+
+  @Patch('projects/:projectId/phases/:phaseId')
+  @Roles('admin')
+  @ApiOperation({
+    summary: 'Atualizar fase (ex.: responsável pela tarefa)',
+    description:
+      'assignedWorkerId deve referir um worker com ProjectAssignment ativo no projeto; null remove.',
+  })
+  patchPhase(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('phaseId', ParseUUIDPipe) phaseId: string,
+    @Body() dto: UpdatePhaseDto,
+  ) {
+    return this.phasesService.updatePhaseForProject(projectId, phaseId, dto);
   }
 
   @Get('phases/:id')
@@ -63,17 +100,6 @@ export class PhasesController {
     return this.phasesService.updateStatus(id, req.user.id, dto);
   }
 
-  @Post('phases/:id/validate')
-  @Roles('client', 'admin')
-  @ApiOperation({ summary: 'Validar (aprovar/rejeitar) uma fase — client ou admin' })
-  validate(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Req() req: any,
-    @Body() dto: ValidatePhaseDto,
-  ) {
-    return this.phasesService.validatePhase(id, dto.approved, req.user.id, dto.reason);
-  }
-
   // ─── Evidências ────────────────────────────────────────
 
   @Post('phases/:id/evidence')
@@ -83,8 +109,17 @@ export class PhasesController {
   @ApiBody({
     schema: {
       type: 'object',
+      required: ['file'],
       properties: {
         file: { type: 'string', format: 'binary' },
+        latitude: { type: 'number', description: 'Opcional — graus decimais' },
+        longitude: { type: 'number', description: 'Opcional — graus decimais' },
+        gpsAccuracy: { type: 'number', description: 'Opcional — metros (aprox.)' },
+        capturedAt: {
+          type: 'string',
+          format: 'date-time',
+          description: 'Opcional — ISO 8601',
+        },
       },
     },
   })
@@ -93,8 +128,62 @@ export class PhasesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: any,
     @UploadedFile() file: Express.Multer.File,
+    @Body() gps: EvidenceGpsDto,
   ) {
-    return this.evidenceService.upload(id, file, req.user.id, req);
+    return this.evidenceService.upload(id, file, req.user.id, req, gps ?? {});
+  }
+
+  @Patch('phase-evidence/:id/location')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Atualizar coordenadas GPS de uma evidência' })
+  @ApiBody({ type: EvidenceGpsDto })
+  updateEvidenceLocation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @Body() dto: EvidenceGpsDto,
+  ) {
+    return this.evidenceService.updateLocation(id, req.user.id, dto);
+  }
+
+  @Patch('phase-evidence/:id/annotations')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Atualizar dados de anotação (JSON) na evidência' })
+  @ApiBody({ type: UpdateAnnotationsDto })
+  updateEvidenceAnnotations(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @Body() dto: UpdateAnnotationsDto,
+  ) {
+    return this.evidenceService.updateAnnotations(id, req.user.id, dto);
+  }
+
+  @Get('phase-evidence/:id/comments')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Listar comentários da evidência (autores com nome e avatar)' })
+  listEvidenceComments(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    return this.evidenceService.listComments(id, req.user.id);
+  }
+
+  @Post('phase-evidence/:id/comments')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Adicionar comentário à evidência' })
+  @ApiBody({ type: CreateEvidenceCommentDto })
+  createEvidenceComment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @Body() dto: CreateEvidenceCommentDto,
+  ) {
+    return this.evidenceService.createComment(id, req.user.id, dto);
+  }
+
+  @Delete('phase-evidence/comments/:commentId')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Remover comentário (soft delete)' })
+  deleteEvidenceComment(
+    @Param('commentId', ParseUUIDPipe) commentId: string,
+    @Req() req: any,
+  ) {
+    return this.evidenceService.deleteComment(commentId, req.user.id);
   }
 
   @Get('phases/:id/evidence')

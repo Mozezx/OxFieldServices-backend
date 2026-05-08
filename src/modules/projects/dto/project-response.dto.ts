@@ -64,4 +64,11 @@ export class ProjectResponseDto {
 
   @ApiPropertyOptional({ description: 'Eventos disponíveis para transição' })
   availableEvents?: string[];
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'URL do portal do cliente (admin web). Requer CLIENT_PORTAL_URL no servidor.',
+  })
+  publicUrl?: string | null;
 }

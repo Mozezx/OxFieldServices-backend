@@ -49,6 +49,31 @@ export class AuthService {
     return value.includes('@');
   }
 
+  private async ensureOrganizationMembership(userId: string, role: UserRole) {
+    const org = await this.prisma.organization.findFirst({
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    if (!org) return;
+
+    await this.prisma.organizationMember.upsert({
+      where: {
+        organizationId_userId: {
+          organizationId: org.id,
+          userId,
+        },
+      },
+      create: {
+        organizationId: org.id,
+        userId,
+        role,
+      },
+      update: {
+        role,
+      },
+    });
+  }
+
   async syncProfile(authId: string, email: string, name: string, role: UserRole) {
     const incomingName = this.normalizeIncomingName(name);
     const safeNameFromEmail = email.split('@')[0];
@@ -123,6 +148,8 @@ export class AuthService {
         include: { worker: true },
       }))!;
     }
+
+    await this.ensureOrganizationMembership(user.id, user.role);
 
     return user;
   }

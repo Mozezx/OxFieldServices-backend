@@ -55,7 +55,14 @@ export class NotificationsController {
       userId: req.user.id,
       cursor: query.cursor,
       limit: query.limit ?? 20,
+      since: query.since,
     });
+  }
+
+  @Get('feed-context')
+  @ApiOperation({ summary: 'Contexto do feed (organizationId + userId para Realtime)' })
+  feedContext(@Req() req: any) {
+    return this.notificationsService.getFeedContext(req.user.id);
   }
 
   @Get('unread-count')

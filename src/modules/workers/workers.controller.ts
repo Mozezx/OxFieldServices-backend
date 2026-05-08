@@ -19,6 +19,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { WorkersService } from './workers.service';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
+import { UpdateWorkerLocationDto } from './dto/update-worker-location.dto';
+import { ListWorkerLocationsDto } from './dto/list-worker-locations.dto';
 
 @ApiTags('workers')
 @ApiBearerAuth()
@@ -43,6 +45,14 @@ export class WorkersController {
     return this.workersService.updateMe(req.user.id, dto);
   }
 
+  @Patch('me/location')
+  @UseGuards(RolesGuard)
+  @Roles('worker')
+  @ApiOperation({ summary: 'Atualizar minha última localização (worker)' })
+  updateMyLocation(@Req() req: any, @Body() dto: UpdateWorkerLocationDto) {
+    return this.workersService.updateMyLocation(req.user.id, dto);
+  }
+
   @Get()
   @UseGuards(RolesGuard)
   @Roles('admin')
@@ -60,6 +70,16 @@ export class WorkersController {
       skip: skip ? parseInt(skip) : undefined,
       take: take ? parseInt(take) : undefined,
     });
+  }
+
+  @Get('locations')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @ApiOperation({ summary: 'Listar workers com última localização (admin)' })
+  @ApiQuery({ name: 'available', required: false, type: Boolean })
+  @ApiQuery({ name: 'recentMinutes', required: false, type: Number })
+  listWorkersWithLocations(@Query() query: ListWorkerLocationsDto) {
+    return this.workersService.listWorkersWithLocations(query);
   }
 
   @Get(':id')

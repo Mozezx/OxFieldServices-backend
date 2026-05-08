@@ -43,6 +43,16 @@
   "notifWorkerInvitedBody": "U bent geselecteerd voor het project \"{projectTitle}\".",
   "notifWorkerAssignedTitle": "Toewijzing bevestigd",
   "notifWorkerAssignedBody": "U bent toegewezen aan het project \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectTitle": "Toegewezen aan project",
+  "notifWorkerAssignedToProjectBody": "U bent toegewezen aan het project \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectTitle": "Verwijderd van project",
+  "notifWorkerRemovedFromProjectBody": "U bent verwijderd van het project \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectAdminTitle": "Medewerker toegewezen",
+  "notifWorkerAssignedToProjectAdminBody": "{workerName} is toegewezen aan \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectAdminTitle": "Medewerker verwijderd",
+  "notifWorkerRemovedFromProjectAdminBody": "{workerName} is verwijderd van \"{projectTitle}\".",
+  "notifPhaseClientCommentedTitle": "Reactie van klant",
+  "notifPhaseClientCommentedBody": "{authorName} heeft gereageerd op fase \"{phaseName}\" in \"{projectTitle}\".",
   "notifContractSignedClientTitle": "Contract ondertekend",
   "notifContractSignedClientBody": "Het contract voor project \"{projectTitle}\" is ondertekend door de werknemer.",
   "notifContractSignedWorkerTitle": "Contract ondertekend",
@@ -69,5 +79,7 @@
   "notifInviteRedeemedClientTitle": "Project toegevoegd aan je account",
   "notifInviteRedeemedClientBody": "Je kunt de fases volgen en de betaling voor \"{projectTitle}\" afronden.",
   "notifInviteRedeemedAdminTitle": "Uitnodiging ingewisseld",
-  "notifInviteRedeemedAdminBody": "{clientName} heeft de uitnodiging voor project \"{projectTitle}\" geaccepteerd."
+  "notifInviteRedeemedAdminBody": "{clientName} heeft de uitnodiging voor project \"{projectTitle}\" geaccepteerd.",
+  "notifEvidenceCommentedTitle": "Reactie op bewijs",
+  "notifEvidenceCommentedBody": "{authorName} reageerde op fase \"{phaseName}\" van project \"{projectTitle}\"."
 }

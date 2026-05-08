@@ -4,7 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AssignmentRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AssignmentsService } from '../assignments/assignments.service';
 import { ContractsService } from '../contracts/contracts.service';
 
 const MIN_RATING = 3.5; // só aplicado quando o worker já tem avaliações (rating > 0)
@@ -15,6 +17,7 @@ export class MatchingService {
   constructor(
     private prisma: PrismaService,
     private contractsService: ContractsService,
+    private assignmentsService: AssignmentsService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -44,7 +47,17 @@ export class MatchingService {
     }
 
     const projectSkills = project.phases.map((p) => p.name.toLowerCase());
-    const currentWorkerId = project.contract?.workerId;
+
+    const leadAssignment = await this.prisma.projectAssignment.findFirst({
+      where: {
+        projectId,
+        role: AssignmentRole.lead_worker,
+        removedAt: null,
+      },
+      select: { workerId: true },
+    });
+    const currentWorkerId =
+      leadAssignment?.workerId ?? project.contract?.workerId;
 
     const candidates = await this.prisma.worker.findMany({
       where: {
@@ -86,8 +99,21 @@ export class MatchingService {
     });
   }
 
-  async assignWorker(projectId: string, workerId: string) {
+  async assignWorker(
+    projectId: string,
+    workerId: string,
+    adminUserId: string,
+  ) {
     this.eventEmitter.emit('worker.invited', { projectId, workerId });
-    return this.contractsService.create({ projectId, workerId });
+    const contract = await this.contractsService.create({
+      projectId,
+      workerId,
+    });
+    await this.assignmentsService.syncLeadWorkerFromContract(
+      projectId,
+      contract.workerId,
+      adminUserId,
+    );
+    return contract;
   }
 }

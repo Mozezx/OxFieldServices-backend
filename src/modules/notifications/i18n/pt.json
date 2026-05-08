@@ -43,6 +43,16 @@
   "notifWorkerInvitedBody": "Você foi selecionado para o projeto \"{projectTitle}\".",
   "notifWorkerAssignedTitle": "Atribuição confirmada",
   "notifWorkerAssignedBody": "Você está atribuído ao projeto \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectTitle": "Atribuído ao projeto",
+  "notifWorkerAssignedToProjectBody": "Você foi atribuído ao projeto \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectTitle": "Removido do projeto",
+  "notifWorkerRemovedFromProjectBody": "Você foi removido do projeto \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectAdminTitle": "Trabalhador atribuído",
+  "notifWorkerAssignedToProjectAdminBody": "{workerName} foi atribuído a \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectAdminTitle": "Trabalhador removido",
+  "notifWorkerRemovedFromProjectAdminBody": "{workerName} foi removido de \"{projectTitle}\".",
+  "notifPhaseClientCommentedTitle": "Comentário do cliente",
+  "notifPhaseClientCommentedBody": "{authorName} comentou na fase \"{phaseName}\" em \"{projectTitle}\".",
   "notifContractSignedClientTitle": "Contrato assinado",
   "notifContractSignedClientBody": "O contrato do projeto \"{projectTitle}\" foi assinado pelo trabalhador.",
   "notifContractSignedWorkerTitle": "Contrato assinado",
@@ -69,5 +79,7 @@
   "notifInviteRedeemedClientTitle": "Obra adicionada à sua conta",
   "notifInviteRedeemedClientBody": "Pode acompanhar as fases e finalizar o pagamento de \"{projectTitle}\".",
   "notifInviteRedeemedAdminTitle": "Convite resgatado",
-  "notifInviteRedeemedAdminBody": "{clientName} aceitou o convite para a obra \"{projectTitle}\"."
+  "notifInviteRedeemedAdminBody": "{clientName} aceitou o convite para a obra \"{projectTitle}\".",
+  "notifEvidenceCommentedTitle": "Comentário na evidência",
+  "notifEvidenceCommentedBody": "{authorName} comentou na fase \"{phaseName}\" do projeto \"{projectTitle}\"."
 }

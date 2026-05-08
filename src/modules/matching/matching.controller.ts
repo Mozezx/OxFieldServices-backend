@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsUUID } from 'class-validator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -38,7 +47,12 @@ export class MatchingController {
   assignWorker(
     @Param('projectId') projectId: string,
     @Body() dto: AssignWorkerDto,
+    @Req() req: { user: { id?: string; authId?: string } },
   ) {
-    return this.matchingService.assignWorker(projectId, dto.workerId);
+    const adminId = String(req.user?.id ?? req.user?.authId ?? '');
+    if (!adminId) {
+      throw new ForbiddenException('Não foi possível identificar o administrador.');
+    }
+    return this.matchingService.assignWorker(projectId, dto.workerId, adminId);
   }
 }

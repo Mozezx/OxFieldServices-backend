@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
+import { WorkerAccessTier } from '@prisma/client';
+import { IsArray, IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class UpdateWorkerDto {
   @ApiPropertyOptional({ example: ['eletrica', 'hidraulica'] })
@@ -17,4 +18,9 @@ export class UpdateWorkerDto {
   @IsOptional()
   @IsBoolean()
   available?: boolean;
+
+  @ApiPropertyOptional({ enum: WorkerAccessTier })
+  @IsOptional()
+  @IsEnum(WorkerAccessTier)
+  accessTier?: WorkerAccessTier;
 }

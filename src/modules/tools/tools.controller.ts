@@ -89,9 +89,21 @@ export class ToolsController {
     );
   }
 
+  @Patch('checkouts/:checkoutId/confirm-return')
+  @Roles('admin')
+  @ApiOperation({
+    summary: 'Confirmar receção da ferramenta (admin, após pedido do worker)',
+  })
+  confirmReturn(@Param('checkoutId', ParseUUIDPipe) checkoutId: string) {
+    return this.toolsService.confirmReturnCheckout(checkoutId);
+  }
+
   @Patch('checkouts/:checkoutId/force-return')
   @Roles('admin')
-  @ApiOperation({ summary: 'Registrar devolução forçada (admin)' })
+  @ApiOperation({
+    summary:
+      'Devolução forçada (admin): encerra checkout em CHECKED_OUT ou RETURN_PENDING',
+  })
   forceReturn(@Param('checkoutId', ParseUUIDPipe) checkoutId: string) {
     return this.toolsService.forceReturnCheckout(checkoutId);
   }
@@ -190,7 +202,10 @@ export class ToolsController {
 
   @Post(':id/return')
   @Roles('worker')
-  @ApiOperation({ summary: 'Devolver ferramenta' })
+  @ApiOperation({
+    summary:
+      'Pedir devolução da ferramenta (pendente até o administrador confirmar a receção)',
+  })
   returnTool(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: { id: string } },

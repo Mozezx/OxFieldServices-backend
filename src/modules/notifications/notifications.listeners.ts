@@ -168,11 +168,29 @@ export class NotificationsListeners {
   }
 
   @OnEvent('phase.evidence_uploaded')
-  async onPhaseEvidenceUploaded(payload: { phaseId: string }) {
+  async onPhaseEvidenceUploaded(payload: {
+    phaseId: string;
+    evidenceId: string;
+    projectId: string;
+  }) {
     try {
       const phase = await this.loadPhaseBasics(payload.phaseId);
       if (!phase) return;
       const admins = await this.notifications.getAdminUserIds();
+      const ev = await this.prisma.phaseEvidence.findUnique({
+        where: { id: payload.evidenceId },
+        select: { url: true, type: true, uploader: { select: { name: true } } },
+      });
+      const isImage =
+        Boolean(ev?.type?.startsWith('image/')) ||
+        /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(ev?.url ?? '');
+      const dataBase = {
+        phaseName: phase.name,
+        projectTitle: phase.project.title,
+        projectId: payload.projectId,
+        previewUrl: isImage ? (ev?.url ?? null) : null,
+        workerName: ev?.uploader?.name ?? null,
+      };
       await this.notifications.create({
         userId: phase.project.clientId,
         type: 'phase_evidence_uploaded',
@@ -180,7 +198,7 @@ export class NotificationsListeners {
         body: `O trabalhador enviou evidências para a fase "${phase.name}" em "${phase.project.title}".`,
         entityType: 'phase',
         entityId: payload.phaseId,
-        data: { phaseName: phase.name, projectTitle: phase.project.title },
+        data: dataBase,
       });
       await this.notifications.createForUsers(admins, {
         type: 'phase_evidence_uploaded',
@@ -188,135 +206,47 @@ export class NotificationsListeners {
         body: `Projeto "${phase.project.title}" — fase "${phase.name}".`,
         entityType: 'phase',
         entityId: payload.phaseId,
-        data: { phaseName: phase.name, projectTitle: phase.project.title, variant: 'admin' },
+        data: { ...dataBase, variant: 'admin' },
       });
     } catch (e) {
       this.logger.warn(`phase.evidence_uploaded listener: ${String(e)}`);
     }
   }
 
-  @OnEvent('phase.under_review')
-  async onPhaseUnderReview(payload: { phaseId: string }) {
+  @OnEvent('phase.client_commented')
+  async onPhaseClientCommented(payload: {
+    projectId: string;
+    phaseId: string;
+    phaseName: string;
+    projectTitle: string;
+    authorName: string;
+  }) {
     try {
-      const phase = await this.loadPhaseBasics(payload.phaseId);
-      if (!phase) return;
-      await this.notifications.create({
-        userId: phase.project.clientId,
-        type: 'phase_under_review',
-        title: 'Fase em revisão',
-        body: `A fase "${phase.name}" de "${phase.project.title}" está aguardando sua validação.`,
-        entityType: 'phase',
-        entityId: payload.phaseId,
-        data: { phaseName: phase.name, projectTitle: phase.project.title },
-      });
-    } catch (e) {
-      this.logger.warn(`phase.under_review listener: ${String(e)}`);
-    }
-  }
-
-  @OnEvent('phase.validated')
-  async onPhaseValidated(payload: { phaseId: string }) {
-    try {
+      const admins = await this.notifications.getAdminUserIds();
       const phase = await this.prisma.projectPhase.findUnique({
         where: { id: payload.phaseId },
-        include: {
-          project: {
-            select: {
-              id: true,
-              title: true,
-              clientId: true,
-              contract: {
-                select: {
-                  worker: {
-                    select: { user: { select: { id: true } } },
-                  },
-                },
-              },
-            },
-          },
+        select: {
+          assignedWorker: { select: { userId: true } },
         },
       });
-      if (!phase) return;
-
-      const workerUserId = phase.project.contract?.worker?.user?.id;
-      const clientId = phase.project.clientId;
-
-      await this.notifications.create({
-        userId: clientId,
-        type: 'phase_validated',
-        title: 'Fase validada',
-        body: `A fase ${phase.name} do projeto ${phase.project.title} foi validada.`,
+      const workerUserId = phase?.assignedWorker?.userId;
+      const targets = [...admins, ...(workerUserId ? [workerUserId] : [])];
+      if (targets.length === 0) return;
+      await this.notifications.createForUsers(targets, {
+        type: 'phase_client_commented',
+        title: 'Comentário do cliente',
+        body: `${payload.authorName} comentou na fase "${payload.phaseName}" — ${payload.projectTitle}.`,
         entityType: 'phase',
         entityId: payload.phaseId,
-        data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title },
-      });
-
-      if (workerUserId) {
-        await this.notifications.create({
-          userId: workerUserId,
-          type: 'phase_validated',
-          title: 'Fase aprovada',
-          body: `Sua fase ${phase.name} foi aprovada no projeto ${phase.project.title}.`,
-          entityType: 'phase',
-          entityId: payload.phaseId,
-          data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, variant: 'worker' },
-        });
-      }
-    } catch (e) {
-      this.logger.warn(`phase.validated notification: ${String(e)}`);
-    }
-  }
-
-  @OnEvent('phase.rejected')
-  async onPhaseRejected(payload: { phaseId: string; reason?: string }) {
-    try {
-      const phase = await this.prisma.projectPhase.findUnique({
-        where: { id: payload.phaseId },
-        include: {
-          project: {
-            select: {
-              id: true,
-              title: true,
-              clientId: true,
-              contract: {
-                select: {
-                  worker: {
-                    select: { user: { select: { id: true } } },
-                  },
-                },
-              },
-            },
-          },
+        data: {
+          phaseName: payload.phaseName,
+          projectTitle: payload.projectTitle,
+          projectId: payload.projectId,
+          authorName: payload.authorName,
         },
       });
-      if (!phase) return;
-
-      const workerUserId = phase.project.contract?.worker?.user?.id;
-      const reasonSuffix = payload.reason ? ` Motivo: "${payload.reason}".` : '';
-
-      if (workerUserId) {
-        await this.notifications.create({
-          userId: workerUserId,
-          type: 'phase_rejected',
-          title: 'Retrabalho solicitado',
-          body: `A fase ${phase.name} do projeto ${phase.project.title} precisa de ajustes.${reasonSuffix}`,
-          entityType: 'phase',
-          entityId: payload.phaseId,
-          data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, reason: payload.reason ?? null, variant: 'worker' },
-        });
-      }
-
-      await this.notifications.create({
-        userId: phase.project.clientId,
-        type: 'phase_rejected',
-        title: 'Retrabalho registrado',
-        body: `Retrabalho solicitado para a fase ${phase.name} no projeto ${phase.project.title}.`,
-        entityType: 'phase',
-        entityId: payload.phaseId,
-        data: { projectId: phase.project.id, phaseName: phase.name, projectTitle: phase.project.title, reason: payload.reason ?? null },
-      });
     } catch (e) {
-      this.logger.warn(`phase.rejected notification: ${String(e)}`);
+      this.logger.warn(`phase.client_commented listener: ${String(e)}`);
     }
   }
 
@@ -375,6 +305,111 @@ export class NotificationsListeners {
       });
     } catch (e) {
       this.logger.warn(`worker.invited listener: ${String(e)}`);
+    }
+  }
+
+  @OnEvent('worker.assigned_to_project')
+  async onWorkerAssignedToProject(payload: {
+    projectId: string;
+    workerId: string;
+    assignmentId?: string;
+  }) {
+    try {
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: payload.workerId },
+        select: {
+          userId: true,
+          user: { select: { name: true } },
+        },
+      });
+      const project = await this.prisma.project.findUnique({
+        where: { id: payload.projectId },
+        select: { title: true },
+      });
+      if (!worker) return;
+      const projectTitle = project?.title ?? 'Projeto';
+      const workerName = worker.user?.name?.trim() || 'Worker';
+      await this.notifications.create({
+        userId: worker.userId,
+        type: 'worker_assigned_to_project',
+        title: 'Atribuído ao projeto',
+        body: `Você foi atribuído ao projeto "${projectTitle}".`,
+        entityType: 'project',
+        entityId: payload.projectId,
+        data: {
+          projectTitle,
+          ...(payload.assignmentId ? { assignmentId: payload.assignmentId } : {}),
+        },
+      });
+
+      const admins = (await this.notifications.getAdminUserIds()).filter(
+        (uid) => uid !== worker.userId,
+      );
+      await this.notifications.createForUsers(admins, {
+        type: 'worker_assigned_to_project',
+        title: 'Worker assigned',
+        body: `${workerName} assigned to "${projectTitle}".`,
+        entityType: 'project',
+        entityId: payload.projectId,
+        data: {
+          variant: 'admin',
+          projectTitle,
+          workerName,
+          ...(payload.assignmentId ? { assignmentId: payload.assignmentId } : {}),
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`worker.assigned_to_project listener: ${String(e)}`);
+    }
+  }
+
+  @OnEvent('worker.removed_from_project')
+  async onWorkerRemovedFromProject(payload: {
+    projectId: string;
+    workerId: string;
+  }) {
+    try {
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: payload.workerId },
+        select: {
+          userId: true,
+          user: { select: { name: true } },
+        },
+      });
+      const project = await this.prisma.project.findUnique({
+        where: { id: payload.projectId },
+        select: { title: true },
+      });
+      if (!worker) return;
+      const projectTitle = project?.title ?? 'Projeto';
+      const workerName = worker.user?.name?.trim() || 'Worker';
+      await this.notifications.create({
+        userId: worker.userId,
+        type: 'worker_removed_from_project',
+        title: 'Removido do projeto',
+        body: `Você foi removido do projeto "${projectTitle}".`,
+        entityType: 'project',
+        entityId: payload.projectId,
+        data: { projectTitle },
+      });
+
+      const admins = (await this.notifications.getAdminUserIds()).filter(
+        (uid) => uid !== worker.userId,
+      );
+      await this.notifications.createForUsers(admins, {
+        type: 'worker_removed_from_project',
+        title: 'Worker removed',
+        body: `${workerName} removed from "${projectTitle}".`,
+        entityType: 'project',
+        entityId: payload.projectId,
+        data: {
+          variant: 'admin',
+          projectTitle,
+          workerName,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`worker.removed_from_project listener: ${String(e)}`);
     }
   }
 
@@ -499,6 +534,11 @@ export class NotificationsListeners {
     try {
       const admins = await this.notifications.getAdminUserIds();
       const amountStr = payload.amount.toFixed(2);
+      const phaseRow = await this.prisma.projectPhase.findUnique({
+        where: { id: payload.phaseId },
+        select: { projectId: true },
+      });
+      const projectId = phaseRow?.projectId;
       await this.notifications.create({
         userId: payload.workerUserId,
         type: 'payment_transferred',
@@ -506,7 +546,13 @@ export class NotificationsListeners {
         body: `Foi creditado ${amountStr} no projeto "${payload.projectTitle}".`,
         entityType: 'payment',
         entityId: payload.paymentId,
-        data: { escrowId: payload.escrowId, phaseId: payload.phaseId, projectTitle: payload.projectTitle, amount: amountStr },
+        data: {
+          escrowId: payload.escrowId,
+          phaseId: payload.phaseId,
+          projectTitle: payload.projectTitle,
+          amount: amountStr,
+          ...(projectId ? { projectId } : {}),
+        },
       });
       await this.notifications.createForUsers(admins, {
         type: 'payment_transferred',
@@ -514,7 +560,11 @@ export class NotificationsListeners {
         body: `Projeto "${payload.projectTitle}" — transferência ao trabalhador registrada.`,
         entityType: 'payment',
         entityId: payload.paymentId,
-        data: { projectTitle: payload.projectTitle, variant: 'admin' },
+        data: {
+          projectTitle: payload.projectTitle,
+          variant: 'admin',
+          ...(projectId ? { projectId } : {}),
+        },
       });
     } catch (e) {
       this.logger.warn(`payment.transferred listener: ${String(e)}`);

@@ -43,6 +43,16 @@
   "notifWorkerInvitedBody": "You have been selected for the project \"{projectTitle}\".",
   "notifWorkerAssignedTitle": "Assignment confirmed",
   "notifWorkerAssignedBody": "You are assigned to the project \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectTitle": "Assigned to project",
+  "notifWorkerAssignedToProjectBody": "You were assigned to the project \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectTitle": "Removed from project",
+  "notifWorkerRemovedFromProjectBody": "You were removed from the project \"{projectTitle}\".",
+  "notifWorkerAssignedToProjectAdminTitle": "Worker assigned",
+  "notifWorkerAssignedToProjectAdminBody": "{workerName} was assigned to \"{projectTitle}\".",
+  "notifWorkerRemovedFromProjectAdminTitle": "Worker removed",
+  "notifWorkerRemovedFromProjectAdminBody": "{workerName} was removed from \"{projectTitle}\".",
+  "notifPhaseClientCommentedTitle": "Client comment",
+  "notifPhaseClientCommentedBody": "{authorName} commented on phase \"{phaseName}\" in \"{projectTitle}\".",
   "notifContractSignedClientTitle": "Contract signed",
   "notifContractSignedClientBody": "The contract for project \"{projectTitle}\" has been signed by the worker.",
   "notifContractSignedWorkerTitle": "Contract signed",
@@ -69,5 +79,7 @@
   "notifInviteRedeemedClientTitle": "Project added to your account",
   "notifInviteRedeemedClientBody": "You can track phases and complete payment for \"{projectTitle}\".",
   "notifInviteRedeemedAdminTitle": "Invite redeemed",
-  "notifInviteRedeemedAdminBody": "{clientName} accepted the invite for project \"{projectTitle}\"."
+  "notifInviteRedeemedAdminBody": "{clientName} accepted the invite for project \"{projectTitle}\".",
+  "notifEvidenceCommentedTitle": "Comment on evidence",
+  "notifEvidenceCommentedBody": "{authorName} commented on phase \"{phaseName}\" in project \"{projectTitle}\"."
 }

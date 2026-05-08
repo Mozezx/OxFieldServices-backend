@@ -330,4 +330,55 @@ export class StripeService {
       process.env.STRIPE_WEBHOOK_SECRET!,
     );
   }
+
+  /**
+   * Payment Link para cobrança de invoice (metadata para o webhook).
+   */
+  async createInvoicePaymentLink(params: {
+    invoiceId: string;
+    projectId: string;
+    currency: string;
+    lineItems: { name: string; amountCents: number }[];
+    successRedirectUrl: string;
+  }): Promise<{ id: string; url: string }> {
+    const link = await this.client.paymentLinks.create({
+      line_items: params.lineItems.map((li) => ({
+        price_data: {
+          currency: params.currency,
+          product_data: { name: li.name },
+          unit_amount: li.amountCents,
+        },
+        quantity: 1,
+      })),
+      metadata: {
+        invoiceId: params.invoiceId,
+        projectId: params.projectId,
+      },
+      after_completion: {
+        type: 'redirect',
+        redirect: { url: params.successRedirectUrl },
+      },
+    });
+    return { id: link.id, url: link.url };
+  }
+
+  /**
+   * PaymentIntent para página pública (Payment Element) — metadata para webhook.
+   */
+  async createInvoiceCheckoutPaymentIntent(params: {
+    amountCents: number;
+    invoiceId: string;
+    projectId: string;
+  }) {
+    return this.client.paymentIntents.create({
+      amount: params.amountCents,
+      currency: this.chargeCurrency,
+      metadata: {
+        invoiceId: params.invoiceId,
+        projectId: params.projectId,
+      },
+      automatic_payment_methods: { enabled: true },
+    });
+  }
 }
+

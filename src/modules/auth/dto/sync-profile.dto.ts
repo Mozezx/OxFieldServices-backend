@@ -8,7 +8,7 @@ export class SyncProfileDto {
   @MinLength(2)
   name: string;
 
-  @ApiProperty({ enum: ['client', 'worker'] })
-  @IsEnum(['client', 'worker'])
+  @ApiProperty({ enum: ['client', 'worker', 'admin'] })
+  @IsEnum(UserRole)
   role: UserRole;
 }

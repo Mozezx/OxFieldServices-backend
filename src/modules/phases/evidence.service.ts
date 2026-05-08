@@ -5,10 +5,19 @@ import {
   InternalServerErrorException,
   ForbiddenException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bull';
+import type { Queue } from 'bull';
+import { Prisma, UserRole } from '@prisma/client';
 import { createClient } from '@supabase/supabase-js';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { extname, join } from 'path';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EvidenceGpsDto } from './dto/evidence-gps.dto';
+import { UpdateAnnotationsDto } from './dto/update-annotations.dto';
+import { CreateEvidenceCommentDto } from './dto/create-evidence-comment.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { AI_CAPTION_QUEUE } from '../ai/ai.constants';
 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -31,6 +40,9 @@ export class EvidenceService {
 
   constructor(
     private prisma: PrismaService,
+    private notifications: NotificationsService,
+    private readonly eventEmitter: EventEmitter2,
+    @InjectQueue(AI_CAPTION_QUEUE) private readonly aiCaptionQueue: Queue,
   ) {}
 
   async upload(
@@ -38,6 +50,7 @@ export class EvidenceService {
     file: Express.Multer.File,
     userId: string,
     req?: any,
+    gps?: EvidenceGpsDto,
   ) {
     const idempotencyKey = this.extractIdempotencyKey(req);
     if (!file) {
@@ -80,10 +93,9 @@ export class EvidenceService {
 
     if (!phase) throw new NotFoundException('Fase não encontrada');
 
-    // Só permite upload quando a fase está em progresso ou rejeitada (reenvio)
-    if (phase.status !== 'in_progress' && phase.status !== 'rejected') {
+    if (phase.status === 'completed') {
       throw new BadRequestException(
-        'Upload permitido apenas em fases com status in_progress ou rejected.',
+        'Upload não permitido em fase já concluída.',
       );
     }
 
@@ -135,10 +147,294 @@ export class EvidenceService {
         type: file.mimetype,
         url: publicUrl,
         uploadedBy: userId,
+        ...this.gpsToCreateData(gps),
       },
     });
 
+    if (!isVideo && file.mimetype.startsWith('image/')) {
+      void this.enqueueAiCaption(evidence.id);
+    }
+
+    this.eventEmitter.emit('phase.evidence_uploaded', {
+      phaseId,
+      evidenceId: evidence.id,
+      projectId: phase.projectId,
+    });
+
     return evidence;
+  }
+
+  /** Membro da organização do projeto da evidência (para endpoints de IA). */
+  async ensureEvidenceOrgAccess(evidenceId: string, userId: string) {
+    return this.assertEvidenceInUserOrg(evidenceId, userId);
+  }
+
+  private async enqueueAiCaption(evidenceId: string) {
+    try {
+      await this.aiCaptionQueue.add(
+        { evidenceId },
+        { removeOnComplete: true, removeOnFail: 50, attempts: 2, backoff: { type: 'exponential', delay: 4000 } },
+      );
+    } catch (err) {
+      console.warn('[evidence] Falha ao enfileirar legenda IA:', err);
+    }
+  }
+
+  /**
+   * Atualiza GPS da evidência. Exige que o projeto pertença à organização do utilizador
+   * e que este seja o autor do upload ou admin da mesma organização.
+   */
+  async updateLocation(evidenceId: string, userId: string, dto: EvidenceGpsDto) {
+    const { evidence, memberships } = await this.assertEvidenceInUserOrg(evidenceId, userId);
+    this.assertOwnerOrOrgAdmin(evidence.uploadedBy, userId, memberships);
+
+    const data = this.gpsToUpdateData(dto);
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('Envie pelo menos um campo de localização.');
+    }
+
+    return this.prisma.phaseEvidence.update({
+      where: { id: evidenceId },
+      data,
+    });
+  }
+
+  async updateAnnotations(evidenceId: string, userId: string, dto: UpdateAnnotationsDto) {
+    const { evidence, memberships } = await this.assertEvidenceInUserOrg(evidenceId, userId);
+    this.assertOwnerOrOrgAdmin(evidence.uploadedBy, userId, memberships);
+
+    return this.prisma.phaseEvidence.update({
+      where: { id: evidenceId },
+      data: {
+        annotationData: dto.annotationData as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  async listComments(evidenceId: string, userId: string) {
+    await this.assertEvidenceInUserOrg(evidenceId, userId);
+
+    return this.prisma.evidenceComment.findMany({
+      where: { evidenceId, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        evidenceId: true,
+        authorId: true,
+        content: true,
+        voiceUrl: true,
+        transcript: true,
+        createdAt: true,
+        author: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    });
+  }
+
+  async createComment(evidenceId: string, userId: string, dto: CreateEvidenceCommentDto) {
+    const { evidence } = await this.assertEvidenceInUserOrg(evidenceId, userId);
+
+    const comment = await this.prisma.evidenceComment.create({
+      data: {
+        evidenceId,
+        authorId: userId,
+        content: dto.content.trim(),
+        voiceUrl: dto.voiceUrl?.trim() || undefined,
+      },
+      include: {
+        author: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    });
+
+    if (evidence.uploadedBy !== userId) {
+      await this.notifications.create({
+        userId: evidence.uploadedBy,
+        type: 'evidence_commented',
+        title: 'Comentário na evidência',
+        body: `${comment.author.name} comentou na sua evidência.`,
+        entityType: 'phase_evidence',
+        entityId: evidenceId,
+        data: {
+          authorName: comment.author.name,
+          phaseName: evidence.phase.name,
+          projectTitle: evidence.phase.project.title,
+          commentId: comment.id,
+          evidenceId,
+          projectId: evidence.phase.projectId,
+        },
+      });
+    }
+
+    return comment;
+  }
+
+  async deleteComment(commentId: string, userId: string) {
+    const comment = await this.prisma.evidenceComment.findUnique({
+      where: { id: commentId },
+      include: {
+        evidence: {
+          include: {
+            phase: {
+              include: {
+                project: { select: { organizationId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!comment || comment.deletedAt) {
+      throw new NotFoundException('Comentário não encontrado');
+    }
+
+    const access = await this.assertEvidenceInUserOrg(comment.evidenceId, userId);
+
+    const isAuthor = comment.authorId === userId;
+    const isOrgAdmin = access.memberships.some((m) => m.role === 'admin');
+    const isGlobalAdmin = access.appUser.role === 'admin';
+    if (!isAuthor && !isOrgAdmin) {
+      if (!isGlobalAdmin) {
+        throw new ForbiddenException('Sem permissão para remover este comentário');
+      }
+    }
+
+    await this.prisma.evidenceComment.update({
+      where: { id: commentId },
+      data: { deletedAt: new Date() },
+    });
+
+    return { deleted: true };
+  }
+
+  /** Evidência existe e o utilizador tem acesso por organização ou participação no projeto. */
+  private async assertEvidenceInUserOrg(evidenceId: string, userId: string) {
+    const appUser = await this.requireAppUser(userId);
+    const evidence = await this.prisma.phaseEvidence.findUnique({
+      where: { id: evidenceId },
+      include: {
+        phase: {
+          select: {
+            id: true,
+            name: true,
+            projectId: true,
+            project: {
+              select: {
+                id: true,
+                title: true,
+                organizationId: true,
+                clientId: true,
+                contract: {
+                  select: {
+                    worker: {
+                      select: { userId: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!evidence) throw new NotFoundException('Evidência não encontrada');
+
+    const project = evidence.phase.project;
+    const orgId = project.organizationId;
+    const isOwnerClient =
+      appUser.role === 'client' && project.clientId === appUser.id;
+    const isAssignedWorker =
+      appUser.role === 'worker' && project.contract?.worker?.userId === appUser.id;
+    const isProjectParticipant = isOwnerClient || isAssignedWorker;
+
+    if (!orgId) {
+      // Compatibilidade com dados legados sem organizationId.
+      if (isProjectParticipant || appUser.role === 'admin') {
+        return { evidence, orgId, memberships: [], appUser };
+      }
+      throw new ForbiddenException('Sem permissão para esta evidência');
+    }
+
+    const memberships = await this.prisma.organizationMember.findMany({
+      where: { userId, organizationId: orgId },
+      select: { organizationId: true, role: true },
+    });
+
+    const isOrgAdmin = memberships.some((m) => m.role === 'admin');
+    if (isOrgAdmin) {
+      return { evidence, orgId, memberships, appUser };
+    }
+
+    if (memberships.length > 0 && isProjectParticipant) {
+      return { evidence, orgId, memberships, appUser };
+    }
+
+    // Compatibilidade para contas legadas sem membership, mas já participantes.
+    if (memberships.length === 0 && isProjectParticipant) {
+      return { evidence, orgId, memberships, appUser };
+    }
+
+    throw new ForbiddenException('Sem permissão para esta evidência');
+  }
+
+  private async requireAppUser(
+    userKey: string,
+  ): Promise<{ id: string; role: UserRole }> {
+    const key = userKey?.trim();
+    if (!key) {
+      throw new ForbiddenException('Sessão inválida: identificador de utilizador em falta.');
+    }
+    const user = await this.prisma.user.findFirst({
+      where: { OR: [{ id: key }, { authId: key }] },
+      select: { id: true, role: true },
+    });
+    if (!user) {
+      throw new ForbiddenException(
+        'Utilizador não encontrado na base de dados. Termine sessão, entre novamente ou faça POST /auth/sync.',
+      );
+    }
+    return user;
+  }
+
+  private assertOwnerOrOrgAdmin(
+    uploadedBy: string,
+    userId: string,
+    memberships: { role: string }[],
+  ) {
+    const isOwner = uploadedBy === userId;
+    const isOrgAdmin = memberships.some((m) => m.role === 'admin');
+    if (!isOwner && !isOrgAdmin) {
+      throw new ForbiddenException('Sem permissão para esta ação');
+    }
+  }
+
+  private gpsToCreateData(gps?: EvidenceGpsDto) {
+    if (!gps) return {};
+    const extra: {
+      latitude?: number;
+      longitude?: number;
+      gpsAccuracy?: number;
+      capturedAt?: Date;
+    } = {};
+    if (gps.latitude !== undefined) extra.latitude = gps.latitude;
+    if (gps.longitude !== undefined) extra.longitude = gps.longitude;
+    if (gps.gpsAccuracy !== undefined) extra.gpsAccuracy = gps.gpsAccuracy;
+    if (gps.capturedAt !== undefined) extra.capturedAt = new Date(gps.capturedAt);
+    return extra;
+  }
+
+  private gpsToUpdateData(dto: EvidenceGpsDto) {
+    const data: {
+      latitude?: number;
+      longitude?: number;
+      gpsAccuracy?: number;
+      capturedAt?: Date;
+    } = {};
+    if (dto.latitude !== undefined) data.latitude = dto.latitude;
+    if (dto.longitude !== undefined) data.longitude = dto.longitude;
+    if (dto.gpsAccuracy !== undefined) data.gpsAccuracy = dto.gpsAccuracy;
+    if (dto.capturedAt !== undefined) data.capturedAt = new Date(dto.capturedAt);
+    return data;
   }
 
   private readMp4DurationSeconds(buffer: Buffer): number | null {
@@ -232,13 +528,9 @@ export class EvidenceService {
       throw new ForbiddenException('Sem permissão para remover esta evidência');
     }
 
-    if (
-      evidence.phase.status !== 'in_progress' &&
-      evidence.phase.status !== 'evidence_uploaded' &&
-      evidence.phase.status !== 'rejected'
-    ) {
+    if (evidence.phase.status !== 'in_progress') {
       throw new BadRequestException(
-        'Evidências só podem ser removidas antes da revisão.',
+        'Evidências só podem ser removidas enquanto a fase está em execução.',
       );
     }
 

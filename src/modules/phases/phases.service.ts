@@ -8,6 +8,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdatePhaseStatusDto } from './dto/update-phase-status.dto';
+import { UpdatePhaseDto } from './dto/update-phase.dto';
 import { PhaseStatus } from '@prisma/client';
 
 @Injectable()
@@ -21,8 +22,14 @@ export class PhasesService {
 
   /**
    * Retorna todas as fases de um projeto.
+   * Com `assignedToMe` + worker: se alguma fase tiver `assignedWorkerId`,
+   * devolve só fases atribuídas ao worker atual ou sem responsável (legado).
+   * Se nenhuma fase tiver responsável, devolve todas (legado).
    */
-  async findByProject(projectId: string) {
+  async findByProject(
+    projectId: string,
+    options?: { assignedToMe?: boolean; appUserId?: string },
+  ) {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
     });
@@ -42,15 +49,44 @@ export class PhasesService {
             url: true,
             uploadedAt: true,
             uploadedBy: true,
+            latitude: true,
+            longitude: true,
+            gpsAccuracy: true,
+            capturedAt: true,
+          },
+        },
+        assignedWorker: {
+          select: {
+            id: true,
+            user: { select: { id: true, name: true, avatarUrl: true } },
           },
         },
       },
     });
 
-    return phases.map((phase) => ({
+    let mapped = phases.map((phase) => ({
       ...phase,
       amount: Number(phase.amount),
     }));
+
+    if (options?.assignedToMe && options.appUserId) {
+      const worker = await this.prisma.worker.findUnique({
+        where: { userId: options.appUserId },
+        select: { id: true },
+      });
+      if (worker) {
+        const anyAssigned = mapped.some((p) => p.assignedWorkerId != null);
+        if (anyAssigned) {
+          mapped = mapped.filter(
+            (p) =>
+              p.assignedWorkerId == null ||
+              p.assignedWorkerId === worker.id,
+          );
+        }
+      }
+    }
+
+    return mapped;
   }
 
   /**
@@ -70,7 +106,21 @@ export class PhasesService {
             url: true,
             uploadedAt: true,
             uploadedBy: true,
+            latitude: true,
+            longitude: true,
+            gpsAccuracy: true,
+            capturedAt: true,
           },
+        },
+        assignedWorker: {
+          select: {
+            id: true,
+            user: { select: { id: true, name: true, avatarUrl: true } },
+          },
+        },
+        checklists: {
+          orderBy: { updatedAt: 'desc' },
+          select: { source: true, items: true, updatedAt: true },
         },
       },
     });
@@ -79,19 +129,40 @@ export class PhasesService {
       throw new NotFoundException('Fase não encontrada');
     }
 
+    const templateChecklist = phase.checklists.find((c) => c.source === 'template');
+    const latestChecklist = phase.checklists[0];
+    const checklistRaw = templateChecklist?.items ?? latestChecklist?.items ?? [];
+
     return {
       ...phase,
       amount: Number(phase.amount),
+      checklistItems: this.normalizeChecklistItems(checklistRaw),
     };
   }
 
+  private normalizeChecklistItems(
+    raw: unknown,
+  ): Array<{ label: string; requiresPhoto: boolean; order: number }> {
+    if (!Array.isArray(raw)) return [];
+
+    return raw
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') return null;
+        const entry = item as Record<string, unknown>;
+        const label = String(entry.label ?? '').trim();
+        if (!label) return null;
+        const requiresPhoto = entry.requiresPhoto === true;
+        const orderNum = Number(entry.order);
+        const order = Number.isFinite(orderNum) ? orderNum : index + 1;
+        return { label, requiresPhoto, order };
+      })
+      .filter((item): item is { label: string; requiresPhoto: boolean; order: number } => item !== null)
+      .sort((a, b) => a.order - b.order);
+  }
+
   /**
-   * Atualiza o status de uma fase.
-   * Regras de transição entre status de fase:
-   *   pending → in_progress (quando worker inicia)
-   *   in_progress|rejected|evidence_uploaded → under_review (quando worker envia para revisão)
-   *   under_review → validated | rejected (cliente/admin valida)
-   *   rejected → in_progress (worker corrige)
+   * Atualiza o status de uma fase (modelo documentação — sem validação financeira).
+   * Transições: pending → in_progress → completed
    */
   async updateStatus(id: string, userId: string, dto: UpdatePhaseStatusDto) {
     const phase = await this.prisma.projectPhase.findUnique({
@@ -121,14 +192,12 @@ export class PhasesService {
       };
     }
 
-    // Validar transição de fase
     if (!this.isValidPhaseTransition(currentStatus, newStatus)) {
       throw new BadRequestException(
         `Transição inválida: ${currentStatus} → ${newStatus}`,
       );
     }
 
-    // Verificar permissões
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -137,67 +206,17 @@ export class PhasesService {
       throw new ForbiddenException('Usuário não encontrado');
     }
 
-    // Apenas o cliente do projeto ou admin pode validar/rejeitar
-    if (
-      (newStatus === 'validated' || newStatus === 'rejected') &&
-      phase.project.clientId !== userId &&
-      user.role !== 'admin'
-    ) {
-      throw new ForbiddenException(
-        'Apenas o cliente do projeto ou admin pode validar/rejeitar fases',
-      );
-    }
-
-    // Só pode iniciar ou retomar fase se projeto estiver em execução
-    if (
-      newStatus === 'in_progress' &&
-      phase.project.status !== 'in_execution'
-    ) {
-      throw new BadRequestException(
-        'O projeto precisa estar em execução para iniciar fases',
-      );
-    }
-
-    // Apenas o worker atribuído ao projeto pode iniciar/retomar fases
-    if (newStatus === 'in_progress' && user.role !== 'admin') {
-      const worker = await this.prisma.worker.findUnique({ where: { userId } });
-      if (!worker || phase.project.contract?.workerId !== worker.id) {
-        throw new ForbiddenException(
-          'Apenas o worker atribuído ao projeto pode iniciar fases',
-        );
+    if (newStatus === 'in_progress' || newStatus === 'completed') {
+      if (user.role !== 'admin') {
+        const worker = await this.prisma.worker.findUnique({ where: { userId } });
+        if (!worker || phase.project.contract?.workerId !== worker.id) {
+          throw new ForbiddenException(
+            'Apenas o worker atribuído ou admin pode alterar o status da fase',
+          );
+        }
       }
     }
 
-    // Obrigatório ter evidências para enviar para revisão
-    if (newStatus === 'under_review') {
-      const evidences = await this.prisma.phaseEvidence.findMany({
-        where: { phaseId: id },
-        select: { type: true },
-      });
-
-      if (evidences.length === 0) {
-        throw new BadRequestException(
-          'Upload de evidências obrigatório antes de enviar para revisão.',
-        );
-      }
-
-      const imageCount = evidences.filter((item) =>
-        item.type.startsWith('image/'),
-      ).length;
-      const videoCount = evidences.filter((item) =>
-        item.type.startsWith('video/'),
-      ).length;
-      const meetsNewRequirement = imageCount >= 1 && videoCount >= 1;
-      const meetsLegacyRequirement = evidences.length >= 3;
-
-      if (!meetsNewRequirement && !meetsLegacyRequirement) {
-        throw new BadRequestException(
-          'Envie pelo menos 1 foto e 1 vídeo (entre 30s e 1m30s) antes de enviar para revisão.',
-        );
-      }
-    }
-
-    // Atualizar status
     const updated = await this.prisma.projectPhase.update({
       where: { id },
       data: { status: newStatus },
@@ -206,8 +225,9 @@ export class PhasesService {
     if (currentStatus === 'pending' && newStatus === 'in_progress') {
       this.eventEmitter.emit('phase.started', { phaseId: id });
     }
-    if (newStatus === 'under_review') {
-      this.eventEmitter.emit('phase.under_review', { phaseId: id });
+
+    if (newStatus === 'completed') {
+      await this.maybeAdvanceProjectToClosing(phase.projectId);
     }
 
     return {
@@ -216,86 +236,36 @@ export class PhasesService {
     };
   }
 
-  /**
-   * Endpoint dedicado de validação pelo cliente.
-   * Aprovação emite evento phase.validated → handler libera pagamento.
-   * Rejeição com reason salva reworkReason e emite phase.rejected.
-   */
-  async validatePhase(
-    phaseId: string,
-    approved: boolean,
-    userId: string,
-    reason?: string,
-  ) {
-    const phase = await this.prisma.projectPhase.findUnique({
-      where: { id: phaseId },
-      include: { project: true, evidences: true },
+  /** Quando todas as fases estão `completed`, avança o projeto para `closing`. */
+  private async maybeAdvanceProjectToClosing(projectId: string) {
+    const phases = await this.prisma.projectPhase.findMany({
+      where: { projectId },
+      select: { status: true },
+    });
+    if (phases.length === 0) return;
+    if (!phases.every((p) => p.status === 'completed')) return;
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { status: true },
+    });
+    if (!project) return;
+    if (project.status === 'closing' || project.status === 'closed') return;
+
+    const fromStatus = project.status;
+    await this.prisma.project.update({
+      where: { id: projectId },
+      data: { status: 'closing' },
     });
 
-    if (!phase) throw new NotFoundException('Fase não encontrada');
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new ForbiddenException('Usuário não encontrado');
-
-    if (phase.project.clientId !== userId && user.role !== 'admin') {
-      throw new ForbiddenException(
-        'Apenas o cliente do projeto ou admin pode validar fases',
-      );
-    }
-
-    if (phase.evidences.length === 0) {
-      throw new BadRequestException('Sem evidências para validar');
-    }
-
-    const alreadyRejected = phase.status === 'rejected';
-
-    if (
-      phase.status !== 'under_review' &&
-      phase.status !== 'evidence_uploaded' &&
-      !alreadyRejected
-    ) {
-      this.logger.warn(
-        `Tentativa de validar fase ${phaseId} com status inválido: ${phase.status}`,
-      );
-      throw new BadRequestException(
-        `Fase precisa estar em revisão ou com evidências enviadas. Status atual: ${phase.status}`,
-      );
-    }
-
-    // Fase já rejeitada: admin pode atualizar o motivo sem reemitir evento de pagamento
-    if (alreadyRejected && approved) {
-      throw new BadRequestException(
-        'Não é possível aprovar uma fase já rejeitada. O worker precisa reenviar evidências primeiro.',
-      );
-    }
-
-    const newStatus: PhaseStatus = approved ? 'validated' : 'rejected';
-
-    this.logger.log(
-      `Fase ${phaseId} ${approved ? 'aprovada' : 'retrabalho solicitado'} por usuário ${userId}`,
-    );
-
-    const updated = await this.prisma.projectPhase.update({
-      where: { id: phaseId },
-      data: {
-        status: newStatus,
-        reworkReason: approved ? null : (reason ?? null),
-      },
+    this.eventEmitter.emit('project.status_changed', {
+      projectId,
+      from: fromStatus,
+      to: 'closing',
     });
 
-    if (approved) {
-      this.eventEmitter.emit('phase.validated', { phaseId });
-    } else {
-      // Evita notificação duplicada se a fase já estava rejeitada e só o motivo foi atualizado
-      if (!alreadyRejected) {
-        this.eventEmitter.emit('phase.rejected', { phaseId, reason });
-      }
-    }
-
-    return { ...updated, amount: Number(updated.amount) };
+    this.logger.log(`Projeto ${projectId} avançado para closing (todas as fases concluídas)`);
   }
-
-  // ─── Helpers ───────────────────────────────────────────
 
   private isValidPhaseTransition(
     current: PhaseStatus,
@@ -303,13 +273,124 @@ export class PhasesService {
   ): boolean {
     const transitions: Record<PhaseStatus, PhaseStatus[]> = {
       pending: ['in_progress'],
-      in_progress: ['under_review'],
-      evidence_uploaded: ['under_review'],
-      under_review: ['validated', 'rejected'],
-      validated: [],
-      rejected: ['in_progress', 'under_review'],
+      in_progress: ['completed'],
+      completed: [],
     };
 
     return transitions[current]?.includes(next) ?? false;
+  }
+
+  /** Adiciona uma fase a um projeto existente (admin only). */
+  async addPhaseToProject(
+    projectId: string,
+    dto: { name: string; order?: number; amount: number; checklist?: { label: string; requiresPhoto?: boolean; order?: number }[] },
+  ) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      include: { phases: { select: { order: true } } },
+    });
+    if (!project) throw new NotFoundException('Projeto não encontrado');
+
+    const maxOrder = project.phases.reduce((m, p) => Math.max(m, p.order), 0);
+    const order = dto.order ?? maxOrder + 1;
+
+    const phase = await this.prisma.projectPhase.create({
+      data: {
+        projectId,
+        name: dto.name,
+        order,
+        amount: dto.amount,
+        ...(dto.checklist && dto.checklist.length > 0
+          ? {
+              checklists: {
+                create: {
+                  items: dto.checklist.map((item, idx) => ({
+                    label: item.label,
+                    requiresPhoto: item.requiresPhoto ?? false,
+                    order: item.order ?? idx + 1,
+                    done: false,
+                  })),
+                  source: 'manual',
+                },
+              },
+            }
+          : {}),
+      },
+      include: { checklists: true },
+    });
+
+    return { ...phase, amount: Number(phase.amount) };
+  }
+
+  /**
+   * Atualiza metadados da fase (ex.: worker responsável). Valida ProjectAssignment ativo.
+   */
+  async updatePhaseForProject(
+    projectId: string,
+    phaseId: string,
+    dto: UpdatePhaseDto,
+  ) {
+    if (!Object.prototype.hasOwnProperty.call(dto, 'assignedWorkerId')) {
+      throw new BadRequestException('Nenhum campo para atualizar.');
+    }
+
+    const phase = await this.prisma.projectPhase.findFirst({
+      where: { id: phaseId, projectId },
+      select: { id: true },
+    });
+
+    if (!phase) {
+      throw new NotFoundException('Fase não encontrada neste projeto.');
+    }
+
+    const workerId = dto.assignedWorkerId;
+
+    if (workerId) {
+      const assignment = await this.prisma.projectAssignment.findFirst({
+        where: {
+          projectId,
+          workerId,
+          removedAt: null,
+        },
+      });
+      if (!assignment) {
+        throw new BadRequestException(
+          'O worker precisa estar atribuído ao projeto.',
+        );
+      }
+    }
+
+    const updated = await this.prisma.projectPhase.update({
+      where: { id: phaseId },
+      data: {
+        assignedWorkerId: workerId === null ? null : workerId,
+      },
+      include: {
+        evidences: {
+          select: {
+            id: true,
+            type: true,
+            url: true,
+            uploadedAt: true,
+            uploadedBy: true,
+            latitude: true,
+            longitude: true,
+            gpsAccuracy: true,
+            capturedAt: true,
+          },
+        },
+        assignedWorker: {
+          select: {
+            id: true,
+            user: { select: { id: true, name: true, avatarUrl: true } },
+          },
+        },
+      },
+    });
+
+    return {
+      ...updated,
+      amount: Number(updated.amount),
+    };
   }
 }

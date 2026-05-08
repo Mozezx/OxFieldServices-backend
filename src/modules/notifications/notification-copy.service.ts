@@ -62,6 +62,8 @@ export class NotificationCopyService {
       reasonRaw !== undefined && reasonRaw !== null && String(reasonRaw).trim()
         ? ` ${String(reasonRaw).trim()}`
         : '';
+    const authorName = String(d.authorName ?? '');
+    const workerName = String(d.workerName ?? '');
 
     try {
       switch (type) {
@@ -253,6 +255,52 @@ export class NotificationCopyService {
             ),
           };
 
+        case 'worker_assigned_to_project':
+          if (variant === 'admin') {
+            return {
+              title: this.t(locale, 'notifWorkerAssignedToProjectAdminTitle'),
+              body: interpolate(
+                this.t(locale, 'notifWorkerAssignedToProjectAdminBody'),
+                { projectTitle, workerName },
+              ),
+            };
+          }
+          return {
+            title: this.t(locale, 'notifWorkerAssignedToProjectTitle'),
+            body: interpolate(
+              this.t(locale, 'notifWorkerAssignedToProjectBody'),
+              { projectTitle },
+            ),
+          };
+
+        case 'worker_removed_from_project':
+          if (variant === 'admin') {
+            return {
+              title: this.t(locale, 'notifWorkerRemovedFromProjectAdminTitle'),
+              body: interpolate(
+                this.t(locale, 'notifWorkerRemovedFromProjectAdminBody'),
+                { projectTitle, workerName },
+              ),
+            };
+          }
+          return {
+            title: this.t(locale, 'notifWorkerRemovedFromProjectTitle'),
+            body: interpolate(
+              this.t(locale, 'notifWorkerRemovedFromProjectBody'),
+              { projectTitle },
+            ),
+          };
+
+        case 'phase_client_commented':
+          return {
+            title: this.t(locale, 'notifPhaseClientCommentedTitle'),
+            body: interpolate(this.t(locale, 'notifPhaseClientCommentedBody'), {
+              authorName,
+              phaseName,
+              projectTitle,
+            }),
+          };
+
         case 'contract_signed':
           if (variant === 'admin') {
             return {
@@ -368,6 +416,16 @@ export class NotificationCopyService {
               this.t(locale, 'notifInviteRedeemedClientBody'),
               { projectTitle },
             ),
+          };
+
+        case 'evidence_commented':
+          return {
+            title: this.t(locale, 'notifEvidenceCommentedTitle'),
+            body: interpolate(this.t(locale, 'notifEvidenceCommentedBody'), {
+              authorName,
+              phaseName,
+              projectTitle,
+            }),
           };
 
         default:

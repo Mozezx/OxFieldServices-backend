@@ -28,16 +28,39 @@ enum ProjectStatus {
 enum PhaseStatus {
   pending
   in_progress
-  evidence_uploaded
-  under_review
-  validated
-  rejected
+  completed
+}
+
+enum AssignmentRole {
+  lead_worker
+  field_worker
+  supervisor
+}
+
+/// Visibilidade de projetos no app worker (WORKER_ASSIGNMENT Fase 4).
+enum WorkerAccessTier {
+  standard
+  restricted
 }
 
 enum EscrowStatus {
   held
   released
   refunded
+}
+
+enum InvoiceStatus {
+  draft // rascunho — não enviado
+  sent // link enviado ao cliente
+  paid // pagamento confirmado
+  cancelled // cancelado
+  overdue // vencido sem pagamento
+}
+
+/// Cliente paga subtotal + taxa (Stripe mostra linha extra) vs taxa deduzida ao contratante (total = subtotal).
+enum InvoiceFeeModel {
+  PASS_THROUGH
+  ABSORBED
 }
 
 enum NotificationType {
@@ -63,8 +86,12 @@ enum NotificationType {
   payment_failed
   worker_invited
   worker_assigned
+  worker_assigned_to_project
+  worker_removed_from_project
+  phase_client_commented
   worker_rated
   invite_redeemed
+  evidence_commented
 }
 
 enum DevicePlatform {
@@ -75,7 +102,83 @@ enum DevicePlatform {
 
 enum ToolCheckoutStatus {
   CHECKED_OUT
+  RETURN_PENDING
   RETURNED
+}
+
+enum ReportType {
+  FULL
+  DAILY_LOG
+  PHASE_SUMMARY
+  PAYMENT_SUMMARY
+}
+
+enum ReportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum DocumentType {
+  CONTRACT
+  RECEIPT
+  BLUEPRINT
+  WORK_ORDER
+  INSPECTION
+  OTHER
+}
+
+enum SignatureTarget {
+  PHASE_VALIDATION
+  CONTRACT
+  PROJECT_REPORT
+  INSPECTION
+}
+
+enum WalkthroughStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ReviewStatus {
+  SENT
+  CLICKED
+  DISMISSED
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique // subdomain / showcase: "acme" → acme.oxfield.com
+  logoUrl   String?
+  planTier  String   @default("free") // "free" | "pro" | "enterprise"
+  createdAt DateTime @default(now())
+
+  members        OrganizationMember[]
+  projects       Project[]
+  toolCategories ToolCategory[]
+  tools          Tool[]
+  notifications  Notification[]
+  projectReports ProjectReport[]
+  templates      ProjectTemplate[]
+  showcase       CompanyShowcase?
+  webhookEndpoints WebhookEndpoint[]
+  crews          Crew[]
+}
+
+model OrganizationMember {
+  id             String @id @default(uuid())
+  organizationId String
+  userId         String
+  role           UserRole
+  joinedAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
 }
 
 model User {
@@ -91,13 +194,20 @@ model User {
   avatarUrl        String? // URL pública Supabase Storage (bucket avatars/{authId}/...)
   createdAt        DateTime @default(now())
 
-  projects      Project[]
-  worker        Worker?
-  evidences     PhaseEvidence[]
-  ratings       WorkerRating[]
-  notifications Notification[]
-  deviceTokens  DeviceToken[]
-  invites       ProjectInvite[] @relation("ClientInvites")
+  members          OrganizationMember[]
+  projects         Project[]
+  worker           Worker?
+  evidences        PhaseEvidence[]
+  evidenceComments EvidenceComment[]
+  ratings          WorkerRating[]
+  notifications    Notification[]
+  deviceTokens       DeviceToken[]
+  invites            ProjectInvite[] @relation("ClientInvites")
+  reviewRequests     ReviewRequest[]
+  assignedProjectAssignments ProjectAssignment[] @relation("ProjectAssignmentAssigner")
+  crewsCreated               Crew[]              @relation("CrewCreator")
+  projectEvidences           ProjectEvidence[]   @relation("ProjectEvidenceUploader")
+  projectEvidenceComments    ProjectEvidenceComment[] @relation("ProjectEvidenceCommentAuthor")
 }
 
 model Worker {
@@ -108,59 +218,157 @@ model Worker {
   rating           Decimal  @default(0)
   shelterCertified Boolean  @default(false)
   available        Boolean  @default(true)
+  accessTier       WorkerAccessTier @default(standard)
 
   stripeAccountId String? // Stripe Connect Express account ID
 
   contracts Contract[]
+  assignments ProjectAssignment[]
   ratings   WorkerRating[]
   toolCheckouts ToolCheckout[]
+  location  WorkerLocation?
+  crewMembers CrewMember[]
+  assignedPhases ProjectPhase[] @relation("PhaseWorker")
+}
+
+model WorkerLocation {
+  id         String   @id @default(uuid())
+  workerId   String   @unique
+  worker     Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  latitude   Float
+  longitude  Float
+  accuracy   Float?
+  capturedAt DateTime
+  updatedAt  DateTime @updatedAt
 }
 
 model ToolCategory {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now())
-  tools     Tool[]
+  id             String   @id @default(uuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  name           String
+  createdAt      DateTime @default(now())
+  tools          Tool[]
+
+  @@index([organizationId])
 }
 
 model Tool {
-  id         String       @id @default(uuid())
-  name       String
-  imageUrl   String?
-  categoryId String
-  category   ToolCategory @relation(fields: [categoryId], references: [id])
-  createdAt  DateTime     @default(now())
-  checkouts  ToolCheckout[]
+  id             String       @id @default(uuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  name           String
+  imageUrl       String?
+  categoryId     String
+  category       ToolCategory @relation(fields: [categoryId], references: [id])
+  createdAt      DateTime     @default(now())
+  checkouts      ToolCheckout[]
+
+  @@index([organizationId])
 }
 
 model ToolCheckout {
-  id           String             @id @default(uuid())
-  toolId       String
-  tool         Tool               @relation(fields: [toolId], references: [id], onDelete: Cascade)
-  workerId     String
-  worker       Worker             @relation(fields: [workerId], references: [id])
-  checkedOutAt DateTime           @default(now())
-  returnedAt   DateTime?
-  status       ToolCheckoutStatus @default(CHECKED_OUT)
+  id                String             @id @default(uuid())
+  toolId            String
+  tool              Tool               @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  workerId          String
+  worker            Worker             @relation(fields: [workerId], references: [id])
+  checkedOutAt      DateTime           @default(now())
+  returnRequestedAt DateTime?
+  returnedAt        DateTime?
+  status            ToolCheckoutStatus @default(CHECKED_OUT)
 
   @@index([toolId, status])
   @@index([workerId, status])
 }
 
 model Project {
-  id        String        @id @default(uuid())
-  clientId  String
-  client    User          @relation(fields: [clientId], references: [id])
-  status    ProjectStatus @default(draft)
-  title     String
-  budget    Decimal
-  location  String
-  deadline  DateTime?
-  createdAt DateTime      @default(now())
+  id             String        @id @default(uuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  clientId       String
+  client         User          @relation(fields: [clientId], references: [id])
+  status         ProjectStatus @default(draft)
+  title          String
+  budget         Decimal
+  location       String
+  deadline       DateTime?
+  createdAt      DateTime      @default(now())
+  /// Segredo rotativo para link público de acompanhamento web (`/projects/public/:token`).
+  publicLinkNonce String       @default(uuid())
+  /// Contacto opcional deixado pelo visitante no portal público (notificações sem conta).
+  publicPortalEmail        String?
+  publicPortalName         String?
+  publicPortalIdentifiedAt DateTime?
 
-  phases   ProjectPhase[]
-  contract Contract?
-  invites  ProjectInvite[]
+  phases        ProjectPhase[]
+  contract      Contract?
+  invites       ProjectInvite[]
+  reports       ProjectReport[]
+  galleryLinks           ProjectGalleryLink[]
+  documents              ProjectDocument[]
+  subcontractorInvites   SubcontractorInvite[]
+  aiWalkthroughs         AIWalkthrough[]
+  beforeAfterComparisons BeforeAfterComparison[]
+  reviewRequests         ReviewRequest[]
+  showcaseItems          ShowcaseItem[]
+  invoices               Invoice[]
+  assignments            ProjectAssignment[]
+  directEvidences        ProjectEvidence[]
+  directChecklists       ProjectChecklist[]
+  /// IDs de etiquetas escolhidas pelo worker (app); visíveis ao cliente. Ex.: active, lead.
+  workerVisibleLabelIds  Json             @default("[]")
+
+  @@index([organizationId])
+}
+
+model ProjectAssignment {
+  id         String    @id @default(uuid())
+  projectId  String
+  workerId   String
+  role       AssignmentRole @default(field_worker)
+  assignedAt DateTime  @default(now())
+  assignedBy String
+  removedAt  DateTime?
+  removedBy  String?
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  worker   Worker  @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  assigner User    @relation("ProjectAssignmentAssigner", fields: [assignedBy], references: [id])
+
+  @@index([projectId])
+  @@index([workerId])
+  @@index([projectId, workerId])
+  @@map("project_assignments")
+}
+
+model Crew {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  organizationId String
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User         @relation("CrewCreator", fields: [createdBy], references: [id])
+  members      CrewMember[]
+
+  @@index([organizationId])
+  @@map("crews")
+}
+
+model CrewMember {
+  crewId   String
+  workerId String
+  addedAt  DateTime @default(now())
+
+  crew   Crew   @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@id([crewId, workerId])
+  @@index([workerId])
+  @@map("crew_members")
 }
 
 model ProjectInvite {
@@ -190,18 +398,374 @@ model ProjectPhase {
   amount       Decimal
   reworkReason String?
 
-  evidences PhaseEvidence[]
+  assignedWorkerId String?
+  assignedWorker   Worker? @relation("PhaseWorker", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
+
+  evidences       PhaseEvidence[]
+  checklists      PhaseChecklist[]
+  documents       ProjectDocument[]
+  aiWalkthroughs  AIWalkthrough[]
+  invoices        Invoice[]
+  comments        PhaseComment[]
+}
+
+model PhaseComment {
+  id         String       @id @default(uuid())
+  phaseId    String
+  phase      ProjectPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  authorName String
+  body       String
+  createdAt  DateTime     @default(now())
+
+  @@index([phaseId])
+  @@map("phase_comments")
+}
+
+model ProjectReport {
+  id             String       @id @default(uuid())
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fileUrl        String       @default("")
+  status         ReportStatus @default(PENDING)
+  progress       Int?
+  generatedBy    String
+  generatedAt    DateTime @default(now())
+  type           ReportType @default(FULL)
+
+  @@index([organizationId])
+  @@index([projectId])
+}
+
+model ProjectGalleryLink {
+  id          String    @id @default(uuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  token       String    @unique @default(uuid())
+  expiresAt   DateTime?
+  isActive    Boolean   @default(true)
+  viewCount   Int       @default(0)
+  createdBy   String
+  createdAt   DateTime  @default(now())
+}
+
+model PhaseChecklist {
+  id        String       @id @default(uuid())
+  phaseId   String
+  phase     ProjectPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  items     Json
+  source    String       @default("ai")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model ProjectDocument {
+  id         String        @id @default(uuid())
+  projectId  String
+  project    Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId    String?
+  phase      ProjectPhase? @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  fileUrl    String
+  fileName   String
+  type       DocumentType
+  uploadedBy String
+  uploadedAt DateTime      @default(now())
+  ocrText    String?
+
+  @@index([projectId])
+}
+
+model DigitalSignature {
+  id            String          @id @default(uuid())
+  signatureData String
+  signerName    String
+  signerId      String?
+  signerRole    String
+  entityType    SignatureTarget
+  entityId      String
+  ipAddress     String?
+  signedAt      DateTime        @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model ProjectTemplate {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  category       String?
+  isActive       Boolean      @default(true)
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  phaseTemplates PhaseTemplate[]
+
+  @@index([organizationId])
+}
+
+model PhaseTemplate {
+  id          String          @id @default(uuid())
+  templateId  String
+  template    ProjectTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name        String
+  order       Int
+  description String?
+  checklist   Json?
+}
+
+model SubcontractorInvite {
+  id        String    @id @default(uuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseIds  String[]
+  email     String
+  name      String
+  token     String    @unique @default(uuid())
+  expiresAt DateTime
+  isActive  Boolean   @default(true)
+  usedAt    DateTime?
+  invitedBy String
+  createdAt DateTime  @default(now())
+
+  @@index([projectId])
+}
+
+model AIWalkthrough {
+  id          String            @id @default(uuid())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       ProjectPhase?     @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  audioUrl    String
+  transcript  String?
+  sections    Json?
+  checklist   Json?
+  summary     String?
+  status      WalkthroughStatus @default(PROCESSING)
+  createdBy   String
+  createdAt   DateTime          @default(now())
+  processedAt DateTime?
+
+  @@index([projectId])
+}
+
+model BeforeAfterComparison {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  beforeUrl String
+  afterUrl  String
+  title     String?
+  exportUrl String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model CompanyShowcase {
+  id             String   @id @default(uuid())
+  organizationId String   @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  logoUrl        String?
+  isPublic       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  items          ShowcaseItem[]
+}
+
+model ShowcaseItem {
+  id                String          @id @default(uuid())
+  showcaseId        String
+  showcase          CompanyShowcase @relation(fields: [showcaseId], references: [id], onDelete: Cascade)
+  projectId         String
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title             String
+  description       String?
+  selectedPhotoUrls String[]
+  location          Json?
+  completedAt       DateTime?
+  order             Int
+
+  @@index([showcaseId])
+}
+
+model ReviewRequest {
+  id            String       @id @default(uuid())
+  projectId     String
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        User         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  googlePlaceId String?
+  reviewUrl     String
+  sentAt        DateTime     @default(now())
+  clickedAt     DateTime?
+  status        ReviewStatus @default(SENT)
+
+  @@index([projectId])
+}
+
+model WebhookEndpoint {
+  id             String   @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  url            String
+  secret         String
+  events         String[]
+  isActive       Boolean  @default(true)
+  createdBy      String
+  createdAt      DateTime @default(now())
+  deliveries     WebhookDelivery[]
+
+  @@index([organizationId])
+}
+
+model WebhookDelivery {
+  id           String          @id @default(uuid())
+  endpointId   String
+  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  event        String
+  payload      Json
+  statusCode   Int?
+  attemptCount Int             @default(0)
+  deliveredAt  DateTime?
+  nextRetryAt  DateTime?
+  createdAt    DateTime        @default(now())
+
+  @@index([endpointId])
 }
 
 model PhaseEvidence {
-  id         String       @id @default(uuid())
-  phaseId    String
-  phase      ProjectPhase @relation(fields: [phaseId], references: [id])
-  type       String
-  url        String
-  uploadedBy String
-  uploader   User         @relation(fields: [uploadedBy], references: [id])
-  uploadedAt DateTime     @default(now())
+  id             String       @id @default(uuid())
+  phaseId        String
+  phase          ProjectPhase @relation(fields: [phaseId], references: [id])
+  type           String
+  url            String
+  uploadedBy     String
+  uploader       User         @relation(fields: [uploadedBy], references: [id])
+  uploadedAt     DateTime     @default(now())
+  latitude       Float?
+  longitude      Float?
+  gpsAccuracy    Float?
+  capturedAt     DateTime?
+  annotationData Json?
+  aiCaption      String?
+  comments       EvidenceComment[]
+}
+
+model EvidenceComment {
+  id         String    @id @default(uuid())
+  evidenceId String
+  evidence   PhaseEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User          @relation(fields: [authorId], references: [id])
+  content    String
+  voiceUrl   String?
+  transcript String?
+  deletedAt  DateTime?
+  createdAt  DateTime      @default(now())
+
+  @@index([evidenceId])
+}
+
+/// Evidência enviada diretamente ao projeto (sem fase).
+model ProjectEvidence {
+  id             String    @id @default(uuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type           String
+  url            String
+  uploadedBy     String
+  uploader       User      @relation("ProjectEvidenceUploader", fields: [uploadedBy], references: [id])
+  uploadedAt     DateTime  @default(now())
+  latitude       Float?
+  longitude      Float?
+  gpsAccuracy    Float?
+  capturedAt     DateTime?
+  annotationData Json?
+  aiCaption      String?
+  note           String?
+  comments       ProjectEvidenceComment[]
+
+  @@index([projectId])
+}
+
+model ProjectEvidenceComment {
+  id         String          @id @default(uuid())
+  evidenceId String
+  evidence   ProjectEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User            @relation("ProjectEvidenceCommentAuthor", fields: [authorId], references: [id])
+  content    String
+  voiceUrl   String?
+  deletedAt  DateTime?
+  createdAt  DateTime        @default(now())
+
+  @@index([evidenceId])
+}
+
+/// Checklist no nível do projeto (independente de fases).
+model ProjectChecklist {
+  id        String   @id @default(uuid())
+  projectId String   @unique
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Invoice {
+  id          String        @id @default(uuid())
+  number      String        @unique // INV-2026-001 (gerado)
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       ProjectPhase? @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+
+  // Destinatário (cliente do contratante — pode ser externo)
+  clientName  String
+  clientEmail String
+  clientPhone String?
+
+  // Valores
+  subtotal    Decimal @db.Decimal(12, 2)
+  feePercent  Decimal @default(2.5) @db.Decimal(5, 2)
+  feeAmount   Decimal @db.Decimal(12, 2)
+  totalAmount Decimal @db.Decimal(12, 2)
+  feeModel    InvoiceFeeModel @default(PASS_THROUGH)
+
+  // Stripe
+  stripePaymentLinkId   String?
+  stripePaymentLinkUrl  String?
+  stripePaymentIntentId String?
+
+  status  InvoiceStatus @default(draft)
+  dueDate DateTime?
+  paidAt  DateTime?
+
+  notes String?
+  items InvoiceItem[]
+
+  escrowTxn EscrowTxn?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([phaseId])
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
 }
 
 model Contract {
@@ -226,6 +790,9 @@ model EscrowTxn {
   releasedAt DateTime?
   /// Charge Stripe (ch_...) do pagamento do cliente — obrigatório em transfers Connect para BR
   stripeSourceChargeId String?
+
+  invoiceId String?  @unique
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
 
   payments Payment[]
 }
@@ -260,20 +827,23 @@ model Skill {
 }
 
 model Notification {
-  id         String           @id @default(uuid())
-  userId     String
-  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type       NotificationType
-  title      String
-  body       String
-  entityType String?
-  entityId   String?
-  data       Json?
-  readAt     DateTime?
-  createdAt  DateTime         @default(now())
+  id             String           @id @default(uuid())
+  organizationId String?
+  organization   Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           NotificationType
+  title          String
+  body           String
+  entityType     String?
+  entityId       String?
+  data           Json?
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
 
   @@index([userId, readAt])
   @@index([userId, createdAt])
+  @@index([organizationId, createdAt])
 }
 
 model DeviceToken {

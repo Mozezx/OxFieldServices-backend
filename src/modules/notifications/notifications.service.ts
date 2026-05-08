@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { NotificationType, UserRole } from '@prisma/client';
+import type { NotificationType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppSyncService } from './app-sync.service';
 import { scopesForNotificationType } from './app-sync.scopes';
@@ -82,6 +82,13 @@ export class NotificationsService {
       { title: input.title, body: input.body },
     );
 
+    const organizationId = await this.resolveOrganizationIdForNotification({
+      type: input.type,
+      entityType: input.entityType ?? null,
+      entityId: input.entityId ?? null,
+      data: dataObj,
+    });
+
     const row = await this.prisma.notification.create({
       data: {
         userId: input.userId,
@@ -91,6 +98,7 @@ export class NotificationsService {
         entityType: input.entityType ?? undefined,
         entityId: input.entityId ?? undefined,
         data: input.data === undefined ? undefined : (input.data as object),
+        organizationId: organizationId ?? undefined,
       },
     });
 
@@ -174,16 +182,24 @@ export class NotificationsService {
     userId: string;
     cursor?: string | null;
     limit: number;
+    since?: string | null;
   }) {
     const take = Math.min(Math.max(params.limit, 1), 50);
+    const sinceDate = params.since ? new Date(params.since) : undefined;
     const cursorDate = params.cursor ? new Date(params.cursor) : undefined;
+
+    const createdAt: Prisma.DateTimeFilter = {};
+    if (sinceDate && !Number.isNaN(sinceDate.getTime())) {
+      createdAt.gte = sinceDate;
+    }
+    if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
+      createdAt.lt = cursorDate;
+    }
 
     const items = await this.prisma.notification.findMany({
       where: {
         userId: params.userId,
-        ...(cursorDate && !Number.isNaN(cursorDate.getTime())
-          ? { createdAt: { lt: cursorDate } }
-          : {}),
+        ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
       },
       orderBy: { createdAt: 'desc' },
       take: take + 1,
@@ -205,11 +221,97 @@ export class NotificationsService {
         entityType: n.entityType,
         entityId: n.entityId,
         data: n.data,
+        organizationId: n.organizationId,
         readAt: n.readAt?.toISOString() ?? null,
         createdAt: n.createdAt.toISOString(),
       })),
       nextCursor,
     };
+  }
+
+  /** Org admin principal (mesma regra que templates) — feed Realtime e contexto. */
+  async getFeedContext(userId: string) {
+    const m = await this.prisma.organizationMember.findFirst({
+      where: { userId, role: 'admin' },
+      orderBy: { joinedAt: 'asc' },
+      select: { organizationId: true },
+    });
+    return {
+      userId,
+      organizationId: m?.organizationId ?? null,
+    };
+  }
+
+  private async resolveOrganizationIdForNotification(params: {
+    type: NotificationType;
+    entityType: string | null;
+    entityId: string | null;
+    data: Record<string, unknown> | null;
+  }): Promise<string | null> {
+    const data = params.data;
+    const projectIdFromData =
+      data && typeof data.projectId === 'string' ? data.projectId : null;
+    if (projectIdFromData) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: projectIdFromData },
+        select: { organizationId: true },
+      });
+      if (p?.organizationId) return p.organizationId;
+    }
+
+    if (params.entityType === 'project' && params.entityId) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: params.entityId },
+        select: { organizationId: true },
+      });
+      return p?.organizationId ?? null;
+    }
+
+    if (params.entityType === 'phase' && params.entityId) {
+      const ph = await this.prisma.projectPhase.findUnique({
+        where: { id: params.entityId },
+        select: { project: { select: { organizationId: true } } },
+      });
+      return ph?.project.organizationId ?? null;
+    }
+
+    if (params.entityType === 'contract' && params.entityId) {
+      const c = await this.prisma.contract.findUnique({
+        where: { id: params.entityId },
+        select: { project: { select: { organizationId: true } } },
+      });
+      return c?.project.organizationId ?? null;
+    }
+
+    if (params.entityType === 'payment' && params.entityId) {
+      const pay = await this.prisma.payment.findUnique({
+        where: { id: params.entityId },
+        select: {
+          escrow: {
+            select: {
+              contract: {
+                select: { project: { select: { organizationId: true } } },
+              },
+            },
+          },
+        },
+      });
+      return pay?.escrow.contract.project.organizationId ?? null;
+    }
+
+    if (params.entityType === 'escrow' && params.entityId) {
+      const esc = await this.prisma.escrowTxn.findUnique({
+        where: { id: params.entityId },
+        select: {
+          contract: {
+            select: { project: { select: { organizationId: true } } },
+          },
+        },
+      });
+      return esc?.contract.project.organizationId ?? null;
+    }
+
+    return null;
   }
 
   async unreadCount(userId: string) {

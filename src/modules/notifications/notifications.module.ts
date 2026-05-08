@@ -6,6 +6,7 @@ import { NotificationsListeners } from './notifications.listeners';
 import { NotificationCopyService } from './notification-copy.service';
 import { AppSyncService } from './app-sync.service';
 import { NotificationsService } from './notifications.service';
+import { EmailService } from './email.service';
 
 @Module({
   imports: [ConfigModule, PrismaModule],
@@ -15,7 +16,8 @@ import { NotificationsService } from './notifications.service';
     AppSyncService,
     NotificationsService,
     NotificationsListeners,
+    EmailService,
   ],
-  exports: [NotificationsService],
+  exports: [NotificationsService, EmailService],
 })
 export class NotificationsModule {}

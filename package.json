@@ -22,7 +22,13 @@
     "db:create-admin": "node scripts/create-admin-user.mjs",
     "db:seed:tools": "node scripts/seed-tools.mjs",
     "db:upload-tool-images": "node scripts/upload-tool-seed-images.mjs",
-    "db:seed": "prisma db seed"
+    "db:seed": "dotenv -e .env.local -- prisma db seed",
+    "db:generate": "dotenv -e .env.local -- prisma generate",
+    "db:migrate": "dotenv -e .env.local -- prisma migrate dev",
+    "db:migrate:deploy": "dotenv -e .env.local -- prisma migrate deploy",
+    "db:studio": "dotenv -e .env.local -- prisma studio",
+    "db:validate": "dotenv -e .env.local -- prisma validate",
+    "db:post-schema": "npm run db:validate && npm run db:generate"
   },
   "prisma": {
     "seed": "node scripts/seed-tools.mjs"
@@ -37,6 +43,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.4.2",
+    "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.105.1",
     "bcryptjs": "^3.0.3",
@@ -46,14 +53,18 @@
     "firebase-admin": "^13.8.0",
     "ioredis": "^5.10.1",
     "jwks-rsa": "^4.0.1",
+    "openai": "^6.36.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0",
     "prisma": "^6.19.3",
+    "puppeteer": "^24.43.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sharp": "^0.34.5",
     "stripe": "^22.1.0",
     "swagger-ui-express": "^5.0.1",
+    "tesseract.js": "^7.0.0",
     "xstate": "^5.31.0"
   },
   "devDependencies": {
@@ -69,6 +80,7 @@
     "@types/node": "^24.0.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^7.0.0",
+    "dotenv-cli": "^11.0.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",

@@ -2,6 +2,10 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { NotificationType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  CacheService,
+  stableCacheSegment,
+} from '../../cache/cache.service';
 import { AppSyncService } from './app-sync.service';
 import { scopesForNotificationType } from './app-sync.scopes';
 import { NotificationCopyService } from './notification-copy.service';
@@ -38,6 +42,7 @@ export class NotificationsService {
     private readonly configService: ConfigService,
     private readonly notificationCopy: NotificationCopyService,
     private readonly appSync: AppSyncService,
+    private readonly cache: CacheService,
   ) {
     const projectId = this.configService.get<string>('FIREBASE_PROJECT_ID');
     const privateKey = this.configService
@@ -103,13 +108,20 @@ export class NotificationsService {
     });
 
     const syncScopes = scopesForNotificationType(input.type);
-    await this.appSync.publishInvalidateForUser(input.userId, syncScopes);
+    const syncResourceId = this.syncResourceIdFromNotificationInput(input);
+    await this.appSync.publishInvalidateForUser(
+      input.userId,
+      syncScopes,
+      syncResourceId,
+    );
 
     await this.pushToUser(input.userId, {
       title: localized.title,
       body: localized.body,
       data: this.buildFcmData(input.type, input.entityType, input.entityId, input.data),
     });
+
+    await this.cache.invalidateByPrefix(`notifications:user:${input.userId}:`);
 
     return row;
   }
@@ -185,48 +197,56 @@ export class NotificationsService {
     since?: string | null;
   }) {
     const take = Math.min(Math.max(params.limit, 1), 50);
-    const sinceDate = params.since ? new Date(params.since) : undefined;
-    const cursorDate = params.cursor ? new Date(params.cursor) : undefined;
+    const cacheKey = `notifications:user:${params.userId}:${stableCacheSegment({
+      cursor: params.cursor ?? null,
+      limit: take,
+      since: params.since ?? null,
+    })}`;
 
-    const createdAt: Prisma.DateTimeFilter = {};
-    if (sinceDate && !Number.isNaN(sinceDate.getTime())) {
-      createdAt.gte = sinceDate;
-    }
-    if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
-      createdAt.lt = cursorDate;
-    }
+    return this.cache.cacheGet(cacheKey, 15, async () => {
+      const sinceDate = params.since ? new Date(params.since) : undefined;
+      const cursorDate = params.cursor ? new Date(params.cursor) : undefined;
 
-    const items = await this.prisma.notification.findMany({
-      where: {
-        userId: params.userId,
-        ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
-      },
-      orderBy: { createdAt: 'desc' },
-      take: take + 1,
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (sinceDate && !Number.isNaN(sinceDate.getTime())) {
+        createdAt.gte = sinceDate;
+      }
+      if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
+        createdAt.lt = cursorDate;
+      }
+
+      const items = await this.prisma.notification.findMany({
+        where: {
+          userId: params.userId,
+          ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: take + 1,
+      });
+
+      const hasMore = items.length > take;
+      const slice = hasMore ? items.slice(0, take) : items;
+      const nextCursor =
+        hasMore && slice.length > 0
+          ? slice[slice.length - 1].createdAt.toISOString()
+          : null;
+
+      return {
+        items: slice.map((n) => ({
+          id: n.id,
+          type: n.type,
+          title: n.title,
+          body: n.body,
+          entityType: n.entityType,
+          entityId: n.entityId,
+          data: n.data,
+          organizationId: n.organizationId,
+          readAt: n.readAt?.toISOString() ?? null,
+          createdAt: n.createdAt.toISOString(),
+        })),
+        nextCursor,
+      };
     });
-
-    const hasMore = items.length > take;
-    const slice = hasMore ? items.slice(0, take) : items;
-    const nextCursor =
-      hasMore && slice.length > 0
-        ? slice[slice.length - 1].createdAt.toISOString()
-        : null;
-
-    return {
-      items: slice.map((n) => ({
-        id: n.id,
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        entityType: n.entityType,
-        entityId: n.entityId,
-        data: n.data,
-        organizationId: n.organizationId,
-        readAt: n.readAt?.toISOString() ?? null,
-        createdAt: n.createdAt.toISOString(),
-      })),
-      nextCursor,
-    };
   }
 
   /** Org admin principal (mesma regra que templates) — feed Realtime e contexto. */
@@ -326,10 +346,12 @@ export class NotificationsService {
       where: { id: notificationId, userId },
     });
     if (!n) return null;
-    return this.prisma.notification.update({
+    const row = await this.prisma.notification.update({
       where: { id: notificationId },
       data: { readAt: new Date() },
     });
+    await this.cache.invalidateByPrefix(`notifications:user:${userId}:`);
+    return row;
   }
 
   async markAllRead(userId: string) {
@@ -337,6 +359,7 @@ export class NotificationsService {
       where: { userId, readAt: null },
       data: { readAt: new Date() },
     });
+    await this.cache.invalidateByPrefix(`notifications:user:${userId}:`);
     return { ok: true };
   }
 
@@ -344,6 +367,9 @@ export class NotificationsService {
     const result = await this.prisma.notification.deleteMany({
       where: { id: notificationId, userId },
     });
+    if (result.count > 0) {
+      await this.cache.invalidateByPrefix(`notifications:user:${userId}:`);
+    }
     return { deleted: result.count > 0 };
   }
 
@@ -353,6 +379,18 @@ export class NotificationsService {
       select: { id: true },
     });
     return rows.map((r) => r.id);
+  }
+
+  /** Project id para invalidação granular no app (Realtime + FCM). */
+  private syncResourceIdFromNotificationInput(input: CreateNotificationInput): string | null {
+    const et = input.entityType?.toLowerCase();
+    if (et === 'project' && input.entityId) return input.entityId;
+    const d =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
+        : null;
+    const pid = d?.projectId;
+    return typeof pid === 'string' ? pid : null;
   }
 
   private buildFcmData(
@@ -367,6 +405,15 @@ export class NotificationsService {
       entityId: entityId ?? '',
       scopes: scopesForNotificationType(type).join(','),
     };
+    let resourceId = '';
+    if (entityType?.toLowerCase() === 'project' && entityId) {
+      resourceId = entityId;
+    } else if (extra && typeof extra.projectId === 'string') {
+      resourceId = extra.projectId;
+    }
+    if (resourceId) {
+      data.resourceId = resourceId;
+    }
     if (extra && typeof extra === 'object') {
       data.payload = JSON.stringify(extra);
     }

@@ -28,10 +28,12 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { AssignmentsModule } from './modules/assignments/assignments.module';
 import { CrewsModule } from './modules/crews/crews.module';
+import { CacheModule } from './cache/cache.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env.local', '.env'] }),
+    CacheModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => {

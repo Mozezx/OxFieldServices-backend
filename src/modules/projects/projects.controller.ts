@@ -54,6 +54,13 @@ export class ProjectsController {
   @ApiQuery({ name: 'skip', required: false, type: Number })
   @ApiQuery({ name: 'take', required: false, type: Number })
   @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+    description:
+      'Paginação cursor-based: envie o `id` do último projeto da página anterior (máx. take=50).',
+  })
+  @ApiQuery({
     name: 'workerJobs',
     required: false,
     type: Boolean,
@@ -85,6 +92,7 @@ export class ProjectsController {
     @Query('status') status?: ProjectStatus,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
+    @Query('cursor') cursor?: string,
     @Query('workerJobs') workerJobs?: string,
     @Query('noContract') noContract?: string,
     @Query('noAssignments') noAssignments?: string,
@@ -93,6 +101,7 @@ export class ProjectsController {
     const params: any = {
       skip: skip ? parseInt(skip, 10) : undefined,
       take: take ? parseInt(take, 10) : undefined,
+      ...(cursor?.trim() ? { cursor: cursor.trim() } : {}),
     };
 
     // Filtro por role:

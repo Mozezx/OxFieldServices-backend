@@ -41,6 +41,7 @@ export class AppSyncService {
   async publishInvalidateForUser(
     prismaUserId: string,
     scopes: string[],
+    resourceId?: string | null,
   ): Promise<void> {
     if (!this.client || scopes.length === 0) return;
 
@@ -75,7 +76,9 @@ export class AppSyncService {
                 .send({
                   type: 'broadcast',
                   event: 'invalidate',
-                  payload: { scopes },
+                  payload: resourceId
+                    ? { scopes, resourceId }
+                    : { scopes },
                 })
                 .then((sendStatus) => {
                   if (sendStatus === 'error' || sendStatus === 'timed out') {

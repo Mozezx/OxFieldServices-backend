@@ -320,6 +320,9 @@ model Project {
   workerVisibleLabelIds  Json             @default("[]")
 
   @@index([organizationId])
+  @@index([status, organizationId])
+  @@index([createdAt])
+  @@index([clientId])
 }
 
 model ProjectAssignment {
@@ -339,6 +342,7 @@ model ProjectAssignment {
   @@index([projectId])
   @@index([workerId])
   @@index([projectId, workerId])
+  @@index([workerId, removedAt])
   @@map("project_assignments")
 }
 
@@ -654,6 +658,8 @@ model PhaseEvidence {
   annotationData Json?
   aiCaption      String?
   comments       EvidenceComment[]
+
+  @@index([phaseId, uploadedAt])
 }
 
 model EvidenceComment {

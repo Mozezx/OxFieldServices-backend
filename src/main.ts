@@ -1,4 +1,5 @@
 import './load-env';
+import compression from 'compression';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -44,6 +45,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+
+  app.use(compression());
 
   app.enableCors({
     // Apps móveis costumam não enviar Origin; Flutter web / LAN usam 192.168.x ou 10.x.

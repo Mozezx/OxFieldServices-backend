@@ -5,12 +5,23 @@ import {
 } from '@nestjs/common';
 import { ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  CacheService,
+  stableCacheSegment,
+} from '../../cache/cache.service';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { UpdateWorkerLocationDto } from './dto/update-worker-location.dto';
 
 @Injectable()
 export class WorkersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
+
+  private async invalidateWorkerListCache(): Promise<void> {
+    await this.cache.invalidateByPrefix('workers:list:');
+  }
 
   async findMe(userId: string) {
     const worker = await this.prisma.worker.findUnique({
@@ -44,10 +55,23 @@ export class WorkersService {
       },
     });
 
+    await this.invalidateWorkerListCache();
+
     return this.formatWorker(updated);
   }
 
   async findAll(params: { available?: boolean; skip?: number; take?: number }) {
+    const cacheKey = `workers:list:${stableCacheSegment(params)}`;
+    return this.cache.cacheGet(cacheKey, 120, () =>
+      this.findAllUncached(params),
+    );
+  }
+
+  private async findAllUncached(params: {
+    available?: boolean;
+    skip?: number;
+    take?: number;
+  }) {
     const where: any = {};
     if (params.available !== undefined) where.available = params.available;
 
@@ -100,6 +124,8 @@ export class WorkersService {
         },
       },
     });
+
+    await this.invalidateWorkerListCache();
 
     return this.formatWorker(updated);
   }

@@ -10,6 +10,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Invoice, InvoiceFeeModel, InvoiceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../cache/cache.service';
 import { StripeService } from './stripe.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
@@ -36,7 +37,12 @@ export class InvoiceService {
     private readonly stripeService: StripeService,
     private readonly eventEmitter: EventEmitter2,
     private readonly emailService: EmailService,
+    private readonly cache: CacheService,
   ) {}
+
+  private async invalidateInvoiceAdminListCache(): Promise<void> {
+    await this.cache.invalidateByPrefix('invoices:list:');
+  }
 
   private getPublicTokenSecret(): string {
     const dedicated = process.env.INVOICE_PUBLIC_TOKEN_SECRET?.trim();
@@ -183,7 +189,7 @@ export class InvoiceService {
 
     const number = await this.generateInvoiceNumber();
 
-    return this.prisma.invoice.create({
+    const created = await this.prisma.invoice.create({
       data: {
         number,
         projectId,
@@ -203,6 +209,8 @@ export class InvoiceService {
       },
       include: { items: { select: { id: true } } },
     });
+    await this.invalidateInvoiceAdminListCache();
+    return created;
   }
 
   async updateDraftInvoice(
@@ -278,7 +286,7 @@ export class InvoiceService {
       feeModel,
     );
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (dto.items && dto.items.length > 0) {
         await tx.invoiceItem.deleteMany({ where: { invoiceId } });
       }
@@ -318,6 +326,8 @@ export class InvoiceService {
         include: { items: { select: { id: true } } },
       });
     });
+    await this.invalidateInvoiceAdminListCache();
+    return updated;
   }
 
   /**
@@ -470,6 +480,8 @@ export class InvoiceService {
       `Invoice ${inv.number} enviada com Stripe Payment Link — ${inv.clientEmail}`,
     );
 
+    await this.invalidateInvoiceAdminListCache();
+
     return { url, publicToken };
   }
 
@@ -496,6 +508,8 @@ export class InvoiceService {
       },
     });
 
+    await this.invalidateInvoiceAdminListCache();
+
     this.eventEmitter.emit('invoice.paid', { invoiceId, paymentIntentId });
   }
 
@@ -511,6 +525,8 @@ export class InvoiceService {
       where: { id: invoiceId },
       data: { status: 'cancelled' },
     });
+
+    await this.invalidateInvoiceAdminListCache();
   }
 
   async listByProject(projectId: string) {
@@ -522,13 +538,32 @@ export class InvoiceService {
   }
 
   async listAllAdmin() {
-    return this.prisma.invoice.findMany({
-      orderBy: [{ createdAt: 'desc' }],
-      include: {
-        items: true,
-        project: { select: { id: true, title: true } },
-      },
-    });
+    return this.cache.cacheGet('invoices:list:admin', 30, () =>
+      this.prisma.invoice.findMany({
+        orderBy: [{ createdAt: 'desc' }],
+        select: {
+          id: true,
+          number: true,
+          projectId: true,
+          phaseId: true,
+          clientName: true,
+          clientEmail: true,
+          clientPhone: true,
+          status: true,
+          subtotal: true,
+          feePercent: true,
+          feeAmount: true,
+          totalAmount: true,
+          feeModel: true,
+          dueDate: true,
+          paidAt: true,
+          notes: true,
+          stripePaymentLinkUrl: true,
+          createdAt: true,
+          project: { select: { id: true, title: true } },
+        },
+      }),
+    );
   }
 
   async findOneAdmin(invoiceId: string) {
@@ -629,6 +664,8 @@ export class InvoiceService {
       throw new BadRequestException('Só é possível apagar invoices em rascunho');
     }
     await this.prisma.invoice.delete({ where: { id: invoiceId } });
+
+    await this.invalidateInvoiceAdminListCache();
   }
 
   /** Últimas 4 janelas de 7 dias: cobrado (paidAt) vs novas em aberto (criadas enviadas/pendentes). */

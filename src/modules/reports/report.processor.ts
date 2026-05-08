@@ -143,6 +143,7 @@ export class ReportProcessor {
     const { error } = await this.supabase.storage.from(bucket).upload(path, pdfBuffer, {
       contentType: 'application/pdf',
       upsert: true,
+      cacheControl: 'private, max-age=3600',
     });
 
     if (error) {

@@ -109,6 +109,7 @@ export class DocumentsService {
     const { error } = await this.supabase.storage.from(bucket).upload(objectPath, file.buffer, {
       contentType: file.mimetype,
       upsert: false,
+      cacheControl: 'private, max-age=3600',
     });
 
     if (error) {

@@ -8,6 +8,10 @@ import {
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  CacheService,
+  stableCacheSegment,
+} from '../../cache/cache.service';
 import { TemplatesService } from '../templates/templates.service';
 import { InvoiceService } from '../payments/invoice.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -74,7 +78,12 @@ export class ProjectsService {
     private readonly eventEmitter: EventEmitter2,
     private readonly templatesService: TemplatesService,
     private readonly invoiceService: InvoiceService,
+    private readonly cache: CacheService,
   ) {}
+
+  private async invalidateProjectListCache(): Promise<void> {
+    await this.cache.invalidateByPrefix('projects:list:');
+  }
 
   /** Resolve id interno da tabela User a partir do id Prisma ou do authId (Supabase). */
   async resolveUserKeyToId(userKey: string): Promise<string> {
@@ -311,6 +320,8 @@ export class ProjectsService {
       });
     }
 
+    await this.invalidateProjectListCache();
+
     return this.formatResponse(project);
   }
 
@@ -333,6 +344,25 @@ export class ProjectsService {
     activeNonTerminal?: boolean;
     skip?: number;
     take?: number;
+    /** Paginação cursor-based (`id` do último item da página anterior). */
+    cursor?: string;
+  }) {
+    const cacheKey = `projects:list:${stableCacheSegment(params)}`;
+    return this.cache.cacheGet(cacheKey, 60, () => this.findAllUncached(params));
+  }
+
+  private async findAllUncached(params: {
+    clientId?: string;
+    workerId?: string;
+    workerAccessTier?: WorkerAccessTier;
+    workerOrganizationIds?: string[];
+    status?: ProjectStatus;
+    noContract?: boolean;
+    noAssignments?: boolean;
+    activeNonTerminal?: boolean;
+    skip?: number;
+    take?: number;
+    cursor?: string;
   }) {
     const where: Prisma.ProjectWhereInput = {};
 
@@ -389,45 +419,113 @@ export class ProjectsService {
       };
     }
 
+    const takeRaw = params.take ?? 20;
+    const take = params.cursor
+      ? Math.min(Math.max(takeRaw, 1), 50)
+      : Math.min(Math.max(takeRaw, 1), 100);
+
+    /** Listagem: apenas campos de card + fases resumidas (sem evidências/comentários/checklists). */
+    const listProjectSelect = {
+      id: true,
+      title: true,
+      status: true,
+      budget: true,
+      location: true,
+      deadline: true,
+      createdAt: true,
+      clientId: true,
+      organizationId: true,
+      publicLinkNonce: true,
+      publicPortalEmail: true,
+      publicPortalName: true,
+      publicPortalIdentifiedAt: true,
+      workerVisibleLabelIds: true,
+      client: {
+        select: { id: true, name: true, email: true, avatarUrl: true },
+      },
+      phases: {
+        orderBy: { order: 'asc' as const },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          order: true,
+          amount: true,
+        },
+      },
+      contract: {
+        select: {
+          id: true,
+          workerId: true,
+          totalAmount: true,
+          signedAt: true,
+          worker: {
+            select: {
+              user: { select: { id: true, name: true, email: true } },
+            },
+          },
+          escrow: { select: { id: true, status: true } },
+        },
+      },
+      assignments: {
+        where: { removedAt: null },
+        select: {
+          id: true,
+          workerId: true,
+          role: true,
+          removedAt: true,
+          worker: {
+            select: {
+              user: { select: { name: true } },
+            },
+          },
+        },
+      },
+      _count: {
+        select: {
+          assignments: {
+            where: { removedAt: null },
+          },
+        },
+      },
+    } satisfies Prisma.ProjectSelect;
+
+    if (params.cursor) {
+      let rows;
+      try {
+        rows = await this.prisma.project.findMany({
+          where,
+          take: take + 1,
+          skip: 1,
+          cursor: { id: params.cursor },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: listProjectSelect,
+        });
+      } catch {
+        throw new BadRequestException(
+          'Cursor de paginação inválido ou projeto já não existe.',
+        );
+      }
+      const hasMore = rows.length > take;
+      const slice = hasMore ? rows.slice(0, take) : rows;
+      const nextCursor =
+        hasMore && slice.length > 0 ? slice[slice.length - 1]!.id : null;
+      return {
+        data: slice.map((p) =>
+          this.formatResponse(p, params.workerId),
+        ),
+        nextCursor,
+        take,
+      };
+    }
+
     const [projects, total] = await Promise.all([
       this.prisma.project.findMany({
         where,
         skip: params.skip ?? 0,
-        take: params.take ?? 20,
+        take,
         orderBy: { createdAt: 'desc' },
-        include: {
-          client: {
-            select: { id: true, name: true, email: true, avatarUrl: true },
-          },
-          phases: { orderBy: { order: 'asc' } },
-          contract: {
-            include: {
-              worker: {
-                include: {
-                  user: { select: { id: true, name: true, email: true } },
-                },
-              },
-              escrow: { select: { id: true, status: true } },
-            },
-          },
-          assignments: {
-            where: { removedAt: null },
-            include: {
-              worker: {
-                select: {
-                  user: { select: { name: true } },
-                },
-              },
-            },
-          },
-          _count: {
-            select: {
-              assignments: {
-                where: { removedAt: null },
-              },
-            },
-          },
-        },
+        select: listProjectSelect,
       }),
       this.prisma.project.count({ where }),
     ]);
@@ -438,7 +536,7 @@ export class ProjectsService {
       ),
       total,
       skip: params.skip ?? 0,
-      take: params.take ?? 20,
+      take,
     };
   }
 
@@ -561,6 +659,8 @@ export class ProjectsService {
       },
     });
 
+    await this.invalidateProjectListCache();
+
     return this.formatResponse(updated);
   }
 
@@ -617,6 +717,8 @@ export class ProjectsService {
       to: nextStatus as ProjectStatus,
     });
 
+    await this.invalidateProjectListCache();
+
     return this.formatResponse(updated);
   }
 
@@ -668,6 +770,8 @@ export class ProjectsService {
       from: project.status,
       to: targetStatus as ProjectStatus,
     });
+
+    await this.invalidateProjectListCache();
 
     return this.formatResponse(updated);
   }
@@ -769,6 +873,8 @@ export class ProjectsService {
     }
 
     await this.prisma.project.delete({ where: { id } });
+
+    await this.invalidateProjectListCache();
 
     return { message: 'Projeto removido com sucesso' };
   }

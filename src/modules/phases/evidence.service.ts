@@ -127,6 +127,7 @@ export class EvidenceService {
         .upload(path, file.buffer, {
           contentType: file.mimetype,
           upsert: Boolean(idempotencyKey),
+          cacheControl: 'public, max-age=31536000, immutable',
         });
 
       if (error) {

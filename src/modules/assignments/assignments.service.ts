@@ -6,6 +6,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AssignmentRole, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../cache/cache.service';
 import { AssignWorkerDto } from './dto/assign-worker.dto';
 
 const ASSIGNMENT_ALLOWED_STATUSES: ProjectStatus[] = [
@@ -21,6 +22,7 @@ export class AssignmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly cache: CacheService,
   ) {}
 
   private assertProjectAllowsAssignments(status: ProjectStatus) {
@@ -95,6 +97,8 @@ export class AssignmentsService {
       assignmentId: row.id,
     });
 
+    await this.cache.invalidateByPrefix('projects:list:');
+
     return row;
   }
 
@@ -133,6 +137,8 @@ export class AssignmentsService {
       projectId,
       workerId,
     });
+
+    await this.cache.invalidateByPrefix('projects:list:');
 
     return { ok: true };
   }

@@ -1,8 +1,9 @@
 /**
  * Cria (ou atualiza) um utilizador Supabase Auth e o perfil em public."User" com role admin.
+ * Opcionalmente associa a organização (OrganizationMember, role admin).
  *
  * Uso (na pasta ox-backend):
- *   node scripts/create-admin-user.mjs <email> <password> [nome]
+ *   node scripts/create-admin-user.mjs <email> <password> [nome] [nome_organização]
  *
  * Requer no .env: SUPABASE_URL, SUPABASE_SERVICE_KEY (ou SUPABASE_SERVICE_ROLE_KEY),
  * e DATABASE_URL para o Prisma.
@@ -28,9 +29,10 @@ async function main() {
   const email = process.argv[2];
   const password = process.argv[3];
   const name = process.argv[4]?.trim() || email.split('@')[0];
+  const organizationName = process.argv[5]?.trim();
 
   if (!email?.includes('@') || !password) {
-    console.error('Uso: node scripts/create-admin-user.mjs <email> <password> [nome]');
+    console.error('Uso: node scripts/create-admin-user.mjs <email> <password> [nome] [nome_organização]');
     process.exit(1);
   }
 
@@ -62,8 +64,10 @@ async function main() {
 
   const existing = await prisma.user.findUnique({ where: { email } });
 
+  let userId;
+
   if (existing) {
-    await prisma.user.update({
+    const updated = await prisma.user.update({
       where: { email },
       data: {
         authId,
@@ -71,7 +75,8 @@ async function main() {
         name: name.length >= 2 ? name : existing.name,
       },
     });
-    console.log(`public."User": atualizado para admin (id=${existing.id}).`);
+    userId = updated.id;
+    console.log(`public."User": atualizado para admin (id=${userId}).`);
   } else {
     const created = await prisma.user.create({
       data: {
@@ -81,7 +86,47 @@ async function main() {
         role: 'admin',
       },
     });
-    console.log(`public."User": criado com role admin (id=${created.id}).`);
+    userId = created.id;
+    console.log(`public."User": criado com role admin (id=${userId}).`);
+  }
+
+  if (organizationName) {
+    const org = await prisma.organization.findFirst({
+      where: {
+        OR: [
+          { name: { equals: organizationName, mode: 'insensitive' } },
+          { slug: { equals: organizationName, mode: 'insensitive' } },
+        ],
+      },
+    });
+    if (!org) {
+      const list = await prisma.organization.findMany({
+        select: { id: true, name: true, slug: true },
+        take: 20,
+      });
+      console.error(
+        `Organização não encontrada: "${organizationName}". Existentes (amostra):`,
+        JSON.stringify(list, null, 2),
+      );
+      process.exit(1);
+    }
+    await prisma.organizationMember.upsert({
+      where: {
+        organizationId_userId: {
+          organizationId: org.id,
+          userId,
+        },
+      },
+      create: {
+        organizationId: org.id,
+        userId,
+        role: 'admin',
+      },
+      update: {
+        role: 'admin',
+      },
+    });
+    console.log(`OrganizationMember: ligado a "${org.name}" (slug=${org.slug}) como admin.`);
   }
 
   console.log('Concluído. Pode iniciar sessão no painel admin com este email.');

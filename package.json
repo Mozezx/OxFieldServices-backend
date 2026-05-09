@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:wipe:keep-admin": "node scripts/wipe-data-keep-admin.mjs",
     "db:create-admin": "node scripts/create-admin-user.mjs",
+    "db:ensure-org-member": "node scripts/ensure-org-and-member.mjs",
     "db:seed:tools": "node scripts/seed-tools.mjs",
     "db:upload-tool-images": "node scripts/upload-tool-seed-images.mjs",
     "db:seed": "dotenv -e .env.local -- prisma db seed",

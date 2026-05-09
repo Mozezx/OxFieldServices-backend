@@ -252,7 +252,12 @@ export class ProjectEvidenceService {
 
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: { id: true, clientId: true, organizationId: true },
+      select: {
+        id: true,
+        clientId: true,
+        organizationId: true,
+        contract: { select: { workerId: true } },
+      },
     });
     if (!project) throw new NotFoundException('Projeto não encontrado');
 
@@ -261,11 +266,24 @@ export class ProjectEvidenceService {
     if (appUser.role === 'client' && project.clientId === appUser.id) return appUser;
 
     if (appUser.role === 'worker') {
-      const assignment = await this.prisma.projectAssignment.findFirst({
-        where: { projectId, workerId: { not: undefined }, removedAt: null },
-        include: { worker: { select: { userId: true } } },
+      const worker = await this.prisma.worker.findUnique({
+        where: { userId: appUser.id },
+        select: { id: true },
       });
-      if (assignment?.worker?.userId === appUser.id) return appUser;
+      if (!worker) {
+        throw new ForbiddenException('Sem permissão para este projeto');
+      }
+
+      const assignment = await this.prisma.projectAssignment.findFirst({
+        where: {
+          projectId,
+          workerId: worker.id,
+          removedAt: null,
+        },
+      });
+      if (assignment) return appUser;
+
+      if (project.contract?.workerId === worker.id) return appUser;
     }
 
     throw new ForbiddenException('Sem permissão para este projeto');

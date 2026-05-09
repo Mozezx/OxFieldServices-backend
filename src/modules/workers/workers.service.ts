@@ -206,6 +206,218 @@ export class WorkersService {
     return worker;
   }
 
+  /**
+   * Equipes (crews) onde o worker é membro, com colegas e projetos em que alguém
+   * da mesma equipa tem atribuição ativa.
+   */
+  async findMyCrewContext(userId: string) {
+    const worker = await this.prisma.worker.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!worker) {
+      return { crews: [] as const, projectTeams: [] as const };
+    }
+
+    const memberships = await this.prisma.crewMember.findMany({
+      where: { workerId: worker.id },
+      orderBy: { crew: { name: 'asc' } },
+      include: {
+        crew: {
+          include: {
+            members: {
+              orderBy: { addedAt: 'asc' },
+              include: {
+                worker: {
+                  include: {
+                    user: {
+                      select: { id: true, name: true, avatarUrl: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const crews: Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      members: Array<{
+        workerId: string;
+        name: string;
+        avatarUrl: string | null;
+        isMe: boolean;
+      }>;
+      projects: Array<{
+        id: string;
+        title: string;
+        status: string;
+        location: string;
+      }>;
+    }> = [];
+
+    for (const m of memberships) {
+      const { crew } = m;
+      const memberWorkerIds = crew.members.map((cm) => cm.workerId);
+
+      const projects: Array<{
+        id: string;
+        title: string;
+        status: string;
+        location: string;
+      }> = [];
+
+      if (memberWorkerIds.length > 0) {
+        const assignments = await this.prisma.projectAssignment.findMany({
+          where: {
+            workerId: { in: memberWorkerIds },
+            removedAt: null,
+          },
+          select: {
+            project: {
+              select: { id: true, title: true, status: true, location: true },
+            },
+          },
+        });
+        const seen = new Set<string>();
+        for (const a of assignments) {
+          const pid = a.project.id;
+          if (seen.has(pid)) continue;
+          seen.add(pid);
+          projects.push(a.project);
+        }
+      }
+
+      crews.push({
+        id: crew.id,
+        name: crew.name,
+        description: crew.description,
+        members: crew.members.map((cm) => ({
+          workerId: cm.workerId,
+          name: cm.worker.user?.name ?? '',
+          avatarUrl: cm.worker.user?.avatarUrl ?? null,
+          isMe: cm.workerId === worker.id,
+        })),
+        projects,
+      });
+    }
+
+    const myProjectIds = new Set<string>();
+    const myAssignments = await this.prisma.projectAssignment.findMany({
+      where: { workerId: worker.id, removedAt: null },
+      select: { projectId: true },
+    });
+    for (const a of myAssignments) myProjectIds.add(a.projectId);
+
+    const myContracts = await this.prisma.contract.findMany({
+      where: { workerId: worker.id },
+      select: { projectId: true },
+    });
+    for (const c of myContracts) myProjectIds.add(c.projectId);
+
+    const projectTeams: Array<{
+      project: {
+        id: string;
+        title: string;
+        status: string;
+        location: string;
+      };
+      members: Array<{
+        workerId: string;
+        name: string;
+        avatarUrl: string | null;
+        isMe: boolean;
+      }>;
+    }> = [];
+
+    if (myProjectIds.size > 0) {
+      const projectsWithTeam = await this.prisma.project.findMany({
+        where: { id: { in: [...myProjectIds] } },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          location: true,
+          assignments: {
+            where: { removedAt: null },
+            select: {
+              workerId: true,
+              worker: {
+                select: {
+                  id: true,
+                  user: {
+                    select: { name: true, avatarUrl: true },
+                  },
+                },
+              },
+            },
+          },
+          contract: {
+            select: {
+              workerId: true,
+              worker: {
+                select: {
+                  id: true,
+                  user: {
+                    select: { name: true, avatarUrl: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      for (const p of projectsWithTeam) {
+        const memberMap = new Map<
+          string,
+          { workerId: string; name: string; avatarUrl: string | null; isMe: boolean }
+        >();
+
+        for (const a of p.assignments) {
+          memberMap.set(a.workerId, {
+            workerId: a.workerId,
+            name: a.worker.user?.name ?? '',
+            avatarUrl: a.worker.user?.avatarUrl ?? null,
+            isMe: a.workerId === worker.id,
+          });
+        }
+
+        const cw = p.contract?.worker;
+        if (cw && p.contract?.workerId && !memberMap.has(p.contract.workerId)) {
+          memberMap.set(p.contract.workerId, {
+            workerId: p.contract.workerId,
+            name: cw.user?.name ?? '',
+            avatarUrl: cw.user?.avatarUrl ?? null,
+            isMe: p.contract.workerId === worker.id,
+          });
+        }
+
+        const members = [...memberMap.values()].sort((x, y) =>
+          x.name.localeCompare(y.name),
+        );
+
+        projectTeams.push({
+          project: {
+            id: p.id,
+            title: p.title,
+            status: p.status,
+            location: p.location,
+          },
+          members,
+        });
+      }
+
+      projectTeams.sort((a, b) => a.project.title.localeCompare(b.project.title));
+    }
+
+    return { crews, projectTeams };
+  }
+
   private formatWorker(worker: any) {
     return {
       ...worker,

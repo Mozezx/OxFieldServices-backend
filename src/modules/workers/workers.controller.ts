@@ -53,6 +53,17 @@ export class WorkersController {
     return this.workersService.updateMyLocation(req.user.id, dto);
   }
 
+  @Get('me/crew-context')
+  @UseGuards(RolesGuard)
+  @Roles('worker')
+  @ApiOperation({
+    summary:
+      'Minhas equipes (crews), membros e projetos com atribuição da equipa',
+  })
+  myCrewContext(@Req() req: any) {
+    return this.workersService.findMyCrewContext(req.user.id);
+  }
+
   @Get()
   @UseGuards(RolesGuard)
   @Roles('admin')

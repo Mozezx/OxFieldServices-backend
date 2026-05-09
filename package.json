@@ -26,6 +26,9 @@
     "db:generate": "dotenv -e .env.local -- prisma generate",
     "db:migrate": "dotenv -e .env.local -- prisma migrate dev",
     "db:migrate:deploy": "dotenv -e .env.local -- prisma migrate deploy",
+    "db:migrate:deploy:prod": "dotenv -e .env.production.local -- prisma migrate deploy",
+    "db:generate:prod": "dotenv -e .env.production.local -- prisma generate",
+    "db:post-schema:prod": "dotenv -e .env.production.local -- prisma validate && dotenv -e .env.production.local -- prisma generate",
     "db:studio": "dotenv -e .env.local -- prisma studio",
     "db:validate": "dotenv -e .env.local -- prisma validate",
     "db:post-schema": "npm run db:validate && npm run db:generate"

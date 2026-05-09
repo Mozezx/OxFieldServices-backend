@@ -424,7 +424,7 @@ export class ProjectsService {
       ? Math.min(Math.max(takeRaw, 1), 50)
       : Math.min(Math.max(takeRaw, 1), 100);
 
-    /** Listagem: apenas campos de card + fases resumidas (sem evidências/comentários/checklists). */
+    /** Listagem: card + fases resumidas; 1 evidência mais recente por fase + 1 direta ao projeto (thumbnail). */
     const listProjectSelect = {
       id: true,
       title: true,
@@ -443,6 +443,20 @@ export class ProjectsService {
       client: {
         select: { id: true, name: true, email: true, avatarUrl: true },
       },
+      directEvidences: {
+        take: 1,
+        orderBy: { uploadedAt: 'desc' },
+        select: {
+          id: true,
+          type: true,
+          url: true,
+          uploadedAt: true,
+          capturedAt: true,
+          latitude: true,
+          longitude: true,
+          gpsAccuracy: true,
+        },
+      },
       phases: {
         orderBy: { order: 'asc' as const },
         select: {
@@ -451,6 +465,20 @@ export class ProjectsService {
           status: true,
           order: true,
           amount: true,
+          evidences: {
+            take: 1,
+            orderBy: { uploadedAt: 'desc' },
+            select: {
+              id: true,
+              type: true,
+              url: true,
+              uploadedAt: true,
+              capturedAt: true,
+              latitude: true,
+              longitude: true,
+              gpsAccuracy: true,
+            },
+          },
         },
       },
       contract: {
@@ -1994,6 +2022,7 @@ export class ProjectsService {
         ...phase,
         amount: Number(phase.amount),
       })),
+      directEvidences: project.directEvidences ?? [],
       teamSize,
       leadWorkerName,
       workerVisibleLabelIds:

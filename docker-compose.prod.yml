@@ -6,7 +6,9 @@ services:
     build:
       dockerfile: Dockerfile
     image: ghcr.io/mozezx/ox-backend:${VERSION:-latest}
-    volumes: []
+    volumes:
+      # Persist worker video uploads (local disk); share across container restarts / replicas.
+      - ox_uploads:/app/uploads
     environment:
       NODE_ENV: production
     deploy:
@@ -24,3 +26,6 @@ services:
 
   redis-commander: !reset {}
   stripe-cli: !reset {}
+
+volumes:
+  ox_uploads:

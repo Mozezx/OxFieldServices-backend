@@ -1532,6 +1532,10 @@ export class ProjectsService {
         createdAt: true,
         organization: { select: { name: true, logoUrl: true } },
         client: { select: { name: true } },
+        directEvidences: {
+          select: { id: true, url: true, type: true, uploadedAt: true },
+          orderBy: { uploadedAt: 'asc' },
+        },
         phases: {
           orderBy: { order: 'asc' },
           select: {
@@ -1601,6 +1605,12 @@ export class ProjectsService {
           body: c.body,
           createdAt: c.createdAt.toISOString(),
         })),
+      })),
+      directEvidences: project.directEvidences.map((e) => ({
+        id: e.id,
+        url: e.url,
+        type: e.type,
+        uploadedAt: e.uploadedAt.toISOString(),
       })),
       pendingInvoices: invoices.map((inv) => ({
         id: inv.id,

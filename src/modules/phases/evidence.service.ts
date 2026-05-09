@@ -25,11 +25,13 @@ const ALLOWED_MIME_TYPES = [
   'image/webp',
   'video/mp4',
   'video/quicktime',
+  'video/webm',
+  'video/3gpp',
+  'video/x-msvideo',
+  'video/x-matroska',
 ];
 
 const MAX_FILE_SIZE = 300 * 1024 * 1024; // 300 MB
-const MIN_VIDEO_DURATION_SECONDS = 30;
-const MAX_VIDEO_DURATION_SECONDS = 90;
 
 @Injectable()
 export class EvidenceService {
@@ -59,29 +61,12 @@ export class EvidenceService {
 
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
       throw new BadRequestException(
-        'Tipo de arquivo não permitido. Use jpeg, png, webp, mp4 ou mov.',
+        'Tipo de arquivo não permitido. Use jpeg, png, webp ou vídeo (mp4, mov, webm, 3gp, avi, mkv).',
       );
     }
 
     if (file.size > MAX_FILE_SIZE) {
       throw new BadRequestException('Arquivo excede o limite de 300 MB.');
-    }
-
-    if (file.mimetype.startsWith('video/')) {
-      const durationSeconds = this.readMp4DurationSeconds(file.buffer);
-      if (durationSeconds === null) {
-        throw new BadRequestException(
-          'Não foi possível validar a duração do vídeo. Use MP4 ou MOV válido.',
-        );
-      }
-      if (
-        durationSeconds < MIN_VIDEO_DURATION_SECONDS ||
-        durationSeconds > MAX_VIDEO_DURATION_SECONDS
-      ) {
-        throw new BadRequestException(
-          'Vídeo deve ter entre 30 segundos e 1 minuto e 30 segundos.',
-        );
-      }
     }
 
     const phase = await this.prisma.projectPhase.findUnique({
@@ -114,7 +99,13 @@ export class EvidenceService {
     }
 
     if (isVideo) {
-      publicUrl = await this.saveVideoLocally(phaseId, file, req, idempotencyKey);
+      publicUrl = await this.saveVideoLocally(
+        phase.projectId,
+        phaseId,
+        file,
+        req,
+        idempotencyKey,
+      );
     } else {
       const ext = file.originalname.split('.').pop();
       const filename = idempotencyKey
@@ -550,13 +541,20 @@ export class EvidenceService {
   }
 
   private async saveVideoLocally(
+    projectId: string,
     phaseId: string,
     file: Express.Multer.File,
     req?: any,
     idempotencyKey?: string,
   ): Promise<string> {
-    const uploadsRoot = join(process.cwd(), 'uploads');
-    const evidenceDir = join(uploadsRoot, 'evidences', phaseId);
+    const evidenceDir = join(
+      process.cwd(),
+      'uploads',
+      'projects',
+      projectId,
+      'phases',
+      phaseId,
+    );
     await mkdir(evidenceDir, { recursive: true });
 
     const ext = extname(file.originalname) || '.mp4';
@@ -567,7 +565,7 @@ export class EvidenceService {
     await writeFile(absolutePath, file.buffer);
 
     const baseUrl = this.resolvePublicBaseUrl(req);
-    return `${baseUrl}/uploads/evidences/${phaseId}/${filename}`;
+    return `${baseUrl}/uploads/projects/${projectId}/phases/${phaseId}/${filename}`;
   }
 
   private resolvePublicBaseUrl(req?: any): string {
@@ -593,16 +591,19 @@ export class EvidenceService {
   }
 
   private isLocalEvidenceUrl(url: string): boolean {
-    return url.includes('/uploads/evidences/');
+    return (
+      url.includes('/uploads/evidences/') || url.includes('/uploads/projects/')
+    );
   }
 
   private async removeLocalEvidence(url: string): Promise<void> {
     try {
       const parsed = new URL(url);
-      const marker = '/uploads/evidences/';
-      const rel = parsed.pathname.split(marker)[1];
-      if (!rel) return;
-      const abs = join(process.cwd(), 'uploads', 'evidences', rel);
+      const marker = '/uploads/';
+      const idx = parsed.pathname.indexOf(marker);
+      if (idx === -1) return;
+      const rel = parsed.pathname.slice(idx + marker.length);
+      const abs = join(process.cwd(), 'uploads', rel);
       await unlink(abs);
     } catch {
       // Falha ao remover arquivo local não bloqueia exclusão do registro.

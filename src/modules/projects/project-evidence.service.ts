@@ -16,6 +16,10 @@ const ALLOWED_MIME_TYPES = [
   'image/webp',
   'video/mp4',
   'video/quicktime',
+  'video/webm',
+  'video/3gpp',
+  'video/x-msvideo',
+  'video/x-matroska',
 ];
 
 const MAX_FILE_SIZE = 300 * 1024 * 1024;
@@ -57,7 +61,7 @@ export class ProjectEvidenceService {
 
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
       throw new BadRequestException(
-        'Tipo de arquivo não permitido. Use jpeg, png, webp, mp4 ou mov.',
+        'Tipo de arquivo não permitido. Use jpeg, png, webp ou vídeo (mp4, mov, webm, 3gp, avi, mkv).',
       );
     }
 
@@ -146,7 +150,10 @@ export class ProjectEvidenceService {
       throw new ForbiddenException('Sem permissão para remover esta evidência');
     }
 
-    if (!evidence.url.includes('/uploads/evidences/')) {
+    if (
+      !evidence.url.includes('/uploads/evidences/') &&
+      !evidence.url.includes('/uploads/projects/')
+    ) {
       const storagePath = this.extractSupabasePath(evidence.url);
       if (storagePath) {
         await this.supabase.storage.from('evidences').remove([storagePath]);
@@ -294,7 +301,7 @@ export class ProjectEvidenceService {
     file: Express.Multer.File,
     req?: any,
   ): Promise<string> {
-    const evidenceDir = join(process.cwd(), 'uploads', 'evidences', projectId);
+    const evidenceDir = join(process.cwd(), 'uploads', 'projects', projectId);
     await mkdir(evidenceDir, { recursive: true });
     const ext = extname(file.originalname) || '.mp4';
     const filename = `${Date.now()}${ext}`;
@@ -302,7 +309,7 @@ export class ProjectEvidenceService {
     const baseUrl = req?.headers?.host
       ? `${req.protocol ?? 'http'}://${req.headers.host}`
       : process.env.APP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
-    return `${baseUrl}/uploads/evidences/${projectId}/${filename}`;
+    return `${baseUrl}/uploads/projects/${projectId}/${filename}`;
   }
 
   private extractSupabasePath(url: string): string | null {

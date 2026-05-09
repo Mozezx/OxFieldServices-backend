@@ -23,6 +23,11 @@ export class AuthService {
   ): Promise<UserRole> {
     if (!existing) return requested;
 
+    /** Nunca rebaixar administradores via POST /auth/sync (apps enviam client/worker). */
+    if (existing.role === UserRole.admin) {
+      return UserRole.admin;
+    }
+
     const ownsClientProjects =
       (await this.prisma.project.count({ where: { clientId: existing.id } })) > 0;
 

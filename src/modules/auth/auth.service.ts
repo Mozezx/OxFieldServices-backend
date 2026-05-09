@@ -49,7 +49,15 @@ export class AuthService {
     return value.includes('@');
   }
 
+  /**
+   * Só admins devem ser ligados automaticamente à primeira organização (contexto ox-admin).
+   * Clientes são isolados por `clientId` nas listagens; trabalhadores com tier `standard`
+   * ganham visibilidade de **todas** as obras da org — associar todo o signup à primeira org
+   * expunha contas novas às obras de outros clientes/prestadores.
+   */
   private async ensureOrganizationMembership(userId: string, role: UserRole) {
+    if (role !== UserRole.admin) return;
+
     const org = await this.prisma.organization.findFirst({
       orderBy: { createdAt: 'asc' },
       select: { id: true },
@@ -74,9 +82,14 @@ export class AuthService {
     });
   }
 
+  private isPendingAuthStub(authId: string | null | undefined): boolean {
+    return !authId || authId.startsWith('pending:');
+  }
+
   async syncProfile(authId: string, email: string, name: string, role: UserRole) {
+    const normEmail = email.trim().toLowerCase();
     const incomingName = this.normalizeIncomingName(name);
-    const safeNameFromEmail = email.split('@')[0];
+    const safeNameFromEmail = normEmail.split('@')[0];
     const canUseIncomingName = !!incomingName && !this.looksLikeEmail(incomingName);
 
     const priorByAuth = await this.prisma.user.findUnique({
@@ -98,17 +111,24 @@ export class AuthService {
         where: { authId },
         // Nome é definido no onboarding e não deve ser regravado com fallback de email.
         data: {
-          email,
+          email: normEmail,
           role: effectiveRole,
           ...(shouldRepairName ? { name: incomingName } : {}),
         },
         include: { worker: true },
       });
     } else {
-      const priorByEmail = await this.prisma.user.findUnique({ where: { email } });
+      const priorByEmail = await this.prisma.user.findUnique({
+        where: { email: normEmail },
+      });
       if (priorByEmail) {
         if (priorByEmail.role === 'admin') {
           throw new ConflictException('Este email está reservado para a equipa administrativa.');
+        }
+        if (!this.isPendingAuthStub(priorByEmail.authId)) {
+          throw new ConflictException(
+            'Este email já está associado a outra conta. Inicie sessão com essa conta ou use outro email.',
+          );
         }
         const effectiveRole = await this.resolveEffectiveRole(
           { id: priorByEmail.id, role: priorByEmail.role },
@@ -127,7 +147,7 @@ export class AuthService {
         user = await this.prisma.user.create({
           data: {
             authId,
-            email,
+            email: normEmail,
             name: canUseIncomingName ? incomingName : safeNameFromEmail,
             role,
           },

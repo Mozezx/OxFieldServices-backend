@@ -165,6 +165,20 @@ model Organization {
   showcase       CompanyShowcase?
   webhookEndpoints WebhookEndpoint[]
   crews          Crew[]
+  captureItems   CaptureItem[]
+}
+
+model CaptureItem {
+  id        String   @id @default(cuid())
+  content   String
+  category  String
+  rawInput  String?
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([orgId, createdAt])
+  @@map("capture_items")
 }
 
 model OrganizationMember {

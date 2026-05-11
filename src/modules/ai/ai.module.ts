@@ -19,5 +19,6 @@ import { AI_CAPTION_QUEUE } from './ai.constants';
   ],
   controllers: [AiController],
   providers: [AIService, AiCaptionProcessor],
+  exports: [AIService],
 })
 export class AiModule {}

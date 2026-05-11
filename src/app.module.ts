@@ -28,6 +28,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { AssignmentsModule } from './modules/assignments/assignments.module';
 import { CrewsModule } from './modules/crews/crews.module';
+import { CaptureModule } from './modules/capture/capture.module';
 import { CacheModule } from './cache/cache.module';
 
 @Module({
@@ -88,6 +89,7 @@ import { CacheModule } from './cache/cache.module';
     DocumentsModule,
     AssignmentsModule,
     CrewsModule,
+    CaptureModule,
   ],
   controllers: [AppController],
   providers: [AppService],

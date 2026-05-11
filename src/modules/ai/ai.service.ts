@@ -13,6 +13,22 @@ export type PhaseChecklistItem = {
   order: number;
 };
 
+const CAPTURE_CATEGORIES = [
+  'Ideia',
+  'Oportunidade',
+  'Sistema',
+  'Tarefa',
+  'Futuro',
+  'Preocupação',
+] as const;
+
+export type CaptureCategory = (typeof CAPTURE_CATEGORIES)[number];
+
+export type CaptureResultItem = {
+  content: string;
+  category: CaptureCategory;
+};
+
 @Injectable()
 export class AIService {
   private readonly log = new Logger(AIService.name);
@@ -171,5 +187,60 @@ Regras: "order" começa em 1 e é sequencial; label em português; requiresPhoto
       this.log.warn(`generateProjectSummary falhou: ${String((err as Error).message)}`);
       throw new InternalServerErrorException('Falha ao gerar resumo com o DeepSeek.');
     }
+  }
+
+  /**
+   * Extrai pensamentos categorizados a partir de texto livre (DeepSeek, JSON).
+   */
+  async processCaptureText(freeText: string): Promise<CaptureResultItem[]> {
+    this.assertKey();
+    const system =
+      'Analisa texto livre e extrai pensamentos individuais distintos. Para cada um, devolve uma categoria em português. ' +
+      `Categorias permitidas (usa exatamente estes valores): ${CAPTURE_CATEGORIES.join(', ')}. ` +
+      'Responde APENAS com um JSON array, sem markdown, no formato [{"content":"...","category":"..."}].';
+
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: freeText.trim() },
+        ],
+        max_tokens: 1000,
+        temperature: 0.3,
+      });
+      const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+      return this.parseCaptureJson(raw);
+    } catch (err) {
+      this.log.warn(`processCaptureText falhou: ${String((err as Error).message)}`);
+      throw new InternalServerErrorException('Falha ao processar captura com o DeepSeek.');
+    }
+  }
+
+  private parseCaptureJson(raw: string): CaptureResultItem[] {
+    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripped);
+    } catch {
+      const m = stripped.match(/\[[\s\S]*\]/);
+      if (!m) throw new Error('JSON inválido');
+      parsed = JSON.parse(m[0]);
+    }
+    if (!Array.isArray(parsed)) throw new Error('Esperado array');
+    const allowed = new Set<string>(CAPTURE_CATEGORIES);
+    const out: CaptureResultItem[] = [];
+    for (const row of parsed) {
+      if (!row || typeof row !== 'object') continue;
+      const r = row as Record<string, unknown>;
+      const content = typeof r.content === 'string' ? r.content.trim() : '';
+      if (!content) continue;
+      let category = typeof r.category === 'string' ? r.category.trim() : '';
+      if (!allowed.has(category)) {
+        category = 'Ideia';
+      }
+      out.push({ content, category: category as CaptureCategory });
+    }
+    return out;
   }
 }

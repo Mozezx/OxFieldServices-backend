@@ -209,7 +209,9 @@ export class PhasesService {
     if (newStatus === 'in_progress' || newStatus === 'completed') {
       if (user.role !== 'admin') {
         const worker = await this.prisma.worker.findUnique({ where: { userId } });
-        if (!worker || phase.project.contract?.workerId !== worker.id) {
+        const isContractWorker = worker != null && phase.project.contract?.workerId === worker.id;
+        const isAssignedWorker = worker != null && phase.assignedWorkerId != null && phase.assignedWorkerId === worker.id;
+        if (!worker || (!isContractWorker && !isAssignedWorker)) {
           throw new ForbiddenException(
             'Apenas o worker atribuído ou admin pode alterar o status da fase',
           );

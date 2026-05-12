@@ -211,7 +211,10 @@ export class PhasesService {
         const worker = await this.prisma.worker.findUnique({ where: { userId } });
         const isContractWorker = worker != null && phase.project.contract?.workerId === worker.id;
         const isAssignedWorker = worker != null && phase.assignedWorkerId != null && phase.assignedWorkerId === worker.id;
-        if (!worker || (!isContractWorker && !isAssignedWorker)) {
+        const isProjectAssigned = worker != null && await this.prisma.projectAssignment.findFirst({
+          where: { projectId: phase.projectId, workerId: worker.id, removedAt: null },
+        }) !== null;
+        if (!worker || (!isContractWorker && !isAssignedWorker && !isProjectAssigned)) {
           throw new ForbiddenException(
             'Apenas o worker atribuído ou admin pode alterar o status da fase',
           );

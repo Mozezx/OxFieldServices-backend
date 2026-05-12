@@ -111,17 +111,20 @@ export class CrewsService {
           orderBy: { createdAt: 'asc' },
           select: { id: true },
         });
-        const organizationId =
-          firstOrg?.id ??
-          (
-            await this.prisma.organization.create({
-              data: {
-                name: 'Default Organization',
-                slug: `default-org-${randomUUID().slice(0, 8)}`,
-              },
-              select: { id: true },
-            })
-          ).id;
+        let organizationId: string;
+        if (firstOrg) {
+          organizationId = firstOrg.id;
+        } else {
+          const newOrg = await this.prisma.organization.create({
+            data: {
+              name: 'Default Organization',
+              slug: `default-org-${randomUUID().slice(0, 8)}`,
+            },
+            select: { id: true },
+          });
+          organizationId = newOrg.id;
+          this.eventEmitter.emit('organization.created', { organizationId });
+        }
 
         await this.prisma.organizationMember.upsert({
           where: {

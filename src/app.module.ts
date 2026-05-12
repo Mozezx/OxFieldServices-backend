@@ -30,6 +30,7 @@ import { AssignmentsModule } from './modules/assignments/assignments.module';
 import { CrewsModule } from './modules/crews/crews.module';
 import { CaptureModule } from './modules/capture/capture.module';
 import { CacheModule } from './cache/cache.module';
+import { HubspotModule } from './modules/hubspot/hubspot.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { CacheModule } from './cache/cache.module';
     AssignmentsModule,
     CrewsModule,
     CaptureModule,
+    HubspotModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -2,6 +2,8 @@
 
 import type { ProjectStatus, UserRole } from '@prisma/client';
 
+export type OrganizationCreatedPayload = { organizationId: string };
+
 export type UserCreatedPayload = { userId: string; role: UserRole };
 
 export type ProjectCreatedPayload = { projectId: string; clientId: string };

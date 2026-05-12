@@ -148,12 +148,13 @@ enum ReviewStatus {
 }
 
 model Organization {
-  id        String   @id @default(uuid())
-  name      String
-  slug      String   @unique // subdomain / showcase: "acme" → acme.oxfield.com
-  logoUrl   String?
-  planTier  String   @default("free") // "free" | "pro" | "enterprise"
-  createdAt DateTime @default(now())
+  id                String   @id @default(uuid())
+  name              String
+  slug              String   @unique // subdomain / showcase: "acme" → acme.oxfield.com
+  logoUrl           String?
+  planTier          String   @default("free") // "free" | "pro" | "enterprise"
+  createdAt         DateTime @default(now())
+  hubspotCompanyId  String?
 
   members        OrganizationMember[]
   projects       Project[]
@@ -204,9 +205,10 @@ model User {
   phone            String?
   fcmToken         String?
   preferredLocale  String   @default("pt") // pt | en | es | nl — sync from apps / admin
-  stripeCustomerId String? // referência ao Customer Stripe (cards salvos)
-  avatarUrl        String? // URL pública Supabase Storage (bucket avatars/{authId}/...)
-  createdAt        DateTime @default(now())
+  stripeCustomerId  String? // referência ao Customer Stripe (cards salvos)
+  avatarUrl         String? // URL pública Supabase Storage (bucket avatars/{authId}/...)
+  createdAt         DateTime @default(now())
+  hubspotContactId  String?
 
   members          OrganizationMember[]
   projects         Project[]
@@ -332,6 +334,7 @@ model Project {
   directChecklists       ProjectChecklist[]
   /// IDs de etiquetas escolhidas pelo worker (app); visíveis ao cliente. Ex.: active, lead.
   workerVisibleLabelIds  Json             @default("[]")
+  hubspotDealId          String?
 
   @@index([organizationId])
   @@index([status, organizationId])
@@ -864,6 +867,20 @@ model Notification {
   @@index([userId, readAt])
   @@index([userId, createdAt])
   @@index([organizationId, createdAt])
+}
+
+model HubspotSyncLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  status     String
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("hubspot_sync_logs")
 }
 
 model DeviceToken {

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AIService } from '../ai/ai.service';
 import { ProcessCaptureDto } from './dto/process-capture.dto';
@@ -13,6 +14,7 @@ export class CaptureService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AIService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   private async resolveUserId(userKey: string): Promise<string> {
@@ -62,17 +64,20 @@ export class CaptureService {
           orderBy: { createdAt: 'asc' },
           select: { id: true },
         });
-        const organizationId =
-          firstOrg?.id ??
-          (
-            await this.prisma.organization.create({
-              data: {
-                name: 'Default Organization',
-                slug: `default-org-${randomUUID().slice(0, 8)}`,
-              },
-              select: { id: true },
-            })
-          ).id;
+        let organizationId: string;
+        if (firstOrg) {
+          organizationId = firstOrg.id;
+        } else {
+          const newOrg = await this.prisma.organization.create({
+            data: {
+              name: 'Default Organization',
+              slug: `default-org-${randomUUID().slice(0, 8)}`,
+            },
+            select: { id: true },
+          });
+          organizationId = newOrg.id;
+          this.eventEmitter.emit('organization.created', { organizationId });
+        }
 
         await this.prisma.organizationMember.upsert({
           where: {

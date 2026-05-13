@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  IsEmail,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class CreateWorkerDto {
   @ApiProperty({ description: 'Nome completo' })
@@ -10,6 +17,15 @@ export class CreateWorkerDto {
   @ApiProperty({ description: 'E-mail (único)' })
   @IsEmail()
   email!: string;
+
+  @ApiProperty({
+    description: 'Palavra-passe inicial (Supabase Auth); o trabalhador pode alterá-la depois na app.',
+    minLength: 8,
+  })
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  password!: string;
 
   @ApiPropertyOptional({ description: 'Telefone' })
   @IsOptional()

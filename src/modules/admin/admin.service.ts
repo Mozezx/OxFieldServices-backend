@@ -1,8 +1,13 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LookupOrCreateClientDto } from './dto/lookup-or-create-client.dto';
 import { CreateWorkerDto } from './dto/create-worker.dto';
@@ -10,7 +15,27 @@ import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(AdminService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private config: ConfigService,
+  ) {}
+
+  private getSupabaseAdmin(): SupabaseClient {
+    const url = this.config.get<string>('SUPABASE_URL');
+    const key =
+      this.config.get<string>('SUPABASE_SERVICE_KEY') ??
+      this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) {
+      throw new InternalServerErrorException(
+        'SUPABASE_URL e SUPABASE_SERVICE_KEY (ou SUPABASE_SERVICE_ROLE_KEY) são obrigatórios para criar workers com login.',
+      );
+    }
+    return createClient(url, key, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
 
   /**
    * Busca cliente por email; se não existir, cria um stub com authId "pending:<uuid>".
@@ -56,7 +81,8 @@ export class AdminService {
   }
 
   /**
-   * Cria utilizador worker com authId `pending:<uuid>` e registo Worker (mesmo padrão que cliente stub).
+   * Cria utilizador em Supabase Auth (e-mail + palavra-passe confirmada) e perfil
+   * `User` + `Worker` na API com o mesmo `authId` (sub JWT).
    */
   async createWorker(dto: CreateWorkerDto) {
     const email = dto.email.trim().toLowerCase();
@@ -65,51 +91,83 @@ export class AdminService {
       select: { id: true },
     });
     if (existing) {
-      throw new ConflictException('Este e-mail já está em uso');
+      throw new ConflictException('Este e-mail já está em uso na plataforma');
     }
 
-    const skills = (dto.skills ?? []).map((s) => s.trim()).filter(Boolean);
+    const supabase = this.getSupabaseAdmin();
+    const displayName = dto.name.trim();
+    const password = dto.password.trim();
 
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        name: dto.name.trim(),
-        phone: dto.phone?.trim() || undefined,
-        role: 'worker',
-        authId: `pending:${randomUUID()}`,
-        worker: {
-          create: {
-            skills,
-            available: true,
-            accessTier: 'standard',
-          },
-        },
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        role: true,
-        authId: true,
-        worker: {
-          select: {
-            id: true,
-            skills: true,
-            rating: true,
-            shelterCertified: true,
-            available: true,
-            accessTier: true,
-          },
-        },
-      },
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: displayName },
     });
 
-    if (!user.worker) {
-      throw new ConflictException('Falha ao criar perfil de worker');
+    if (authError || !authData.user) {
+      const msg = authError?.message ?? 'Falha ao criar utilizador no Supabase';
+      if (/already|registered|exists|duplicate/i.test(msg)) {
+        throw new ConflictException(
+          'Este e-mail já está registado no Supabase. Use outro e-mail ou remova a conta em Authentication.',
+        );
+      }
+      throw new BadRequestException(msg);
     }
 
-    return { user, worker: user.worker, isNew: true as const };
+    const authId = authData.user.id;
+    const skills = (dto.skills ?? []).map((s) => s.trim()).filter(Boolean);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          email,
+          name: displayName,
+          phone: dto.phone?.trim() || undefined,
+          role: 'worker',
+          authId,
+          worker: {
+            create: {
+              skills,
+              available: true,
+              accessTier: 'standard',
+            },
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role: true,
+          authId: true,
+          worker: {
+            select: {
+              id: true,
+              skills: true,
+              rating: true,
+              shelterCertified: true,
+              available: true,
+              accessTier: true,
+            },
+          },
+        },
+      });
+
+      if (!user.worker) {
+        throw new ConflictException('Falha ao criar perfil de worker');
+      }
+
+      return { user, worker: user.worker, isNew: true as const };
+    } catch (err) {
+      const { error: delErr } = await supabase.auth.admin.deleteUser(authId);
+      if (delErr) {
+        this.logger.error(
+          `Revert Supabase user falhou após erro Prisma (authId=${authId}): ${delErr.message}`,
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -118,7 +176,7 @@ export class AdminService {
   async deleteWorker(workerId: string) {
     const worker = await this.prisma.worker.findUnique({
       where: { id: workerId },
-      include: { user: { select: { id: true, role: true } } },
+      include: { user: { select: { id: true, role: true, authId: true } } },
     });
     if (!worker) {
       throw new NotFoundException('Worker não encontrado');
@@ -202,6 +260,23 @@ export class AdminService {
       await tx.worker.delete({ where: { id: workerId } });
       await tx.user.delete({ where: { id: userId } });
     });
+
+    const authId = worker.user.authId;
+    if (authId && !authId.startsWith('pending:')) {
+      try {
+        const supabase = this.getSupabaseAdmin();
+        const { error } = await supabase.auth.admin.deleteUser(authId);
+        if (error) {
+          this.logger.warn(
+            `Supabase Auth: não foi possível remover utilizador ${authId}: ${error.message}`,
+          );
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Supabase Auth: falha ao remover utilizador ${authId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
 
     return { deleted: true as const };
   }

@@ -36,27 +36,24 @@ export class AIService {
   private readonly model: string;
 
   constructor(private readonly config: ConfigService) {
-    const apiKey = this.config.get<string>('DEEPSEEK_API_KEY');
+    const apiKey = this.config.get<string>('OPENAI_API_KEY');
     if (!apiKey) {
-      this.log.warn('DEEPSEEK_API_KEY não definida — chamadas de IA falharão.');
+      this.log.warn('OPENAI_API_KEY não definida — chamadas de IA falharão.');
     }
-    const baseURL =
-      this.config.get<string>('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com';
-    this.model = this.config.get<string>('DEEPSEEK_MODEL') ?? 'deepseek-v4-flash';
+    this.model = this.config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
     this.client = new OpenAI({
       apiKey: apiKey ?? 'missing',
-      baseURL,
     });
   }
 
   private assertKey() {
-    if (!this.config.get<string>('DEEPSEEK_API_KEY')) {
-      throw new ServiceUnavailableException('Serviço de IA não configurado (DEEPSEEK_API_KEY).');
+    if (!this.config.get<string>('OPENAI_API_KEY')) {
+      throw new ServiceUnavailableException('Serviço de IA não configurado (OPENAI_API_KEY).');
     }
   }
 
   /**
-   * Legenda curta a partir da imagem (API DeepSeek, formato OpenAI multimodal quando suportado).
+   * Legenda curta a partir da imagem (API OpenAI, multimodal).
    */
   async generateEvidenceCaption(imageUrl: string, phaseContext: string): Promise<string> {
     this.assertKey();
@@ -87,7 +84,7 @@ export class AIService {
       return this.clampCaption(raw);
     } catch (err) {
       this.log.warn(`generateEvidenceCaption falhou: ${String((err as Error).message)}`);
-      throw new InternalServerErrorException('Falha ao gerar legenda com o DeepSeek.');
+      throw new InternalServerErrorException('Falha ao gerar legenda com a OpenAI.');
     }
   }
 
@@ -131,7 +128,7 @@ Regras: "order" começa em 1 e é sequencial; label em português; requiresPhoto
       return this.parseChecklistJson(raw);
     } catch (err) {
       this.log.warn(`generatePhaseChecklist falhou: ${String((err as Error).message)}`);
-      throw new InternalServerErrorException('Falha ao gerar checklist com o DeepSeek.');
+      throw new InternalServerErrorException('Falha ao gerar checklist com a OpenAI.');
     }
   }
 
@@ -185,12 +182,12 @@ Regras: "order" começa em 1 e é sequencial; label em português; requiresPhoto
       return (completion.choices[0]?.message?.content ?? '').trim();
     } catch (err) {
       this.log.warn(`generateProjectSummary falhou: ${String((err as Error).message)}`);
-      throw new InternalServerErrorException('Falha ao gerar resumo com o DeepSeek.');
+      throw new InternalServerErrorException('Falha ao gerar resumo com a OpenAI.');
     }
   }
 
   /**
-   * Extrai pensamentos categorizados a partir de texto livre (DeepSeek, JSON).
+   * Extrai pensamentos categorizados a partir de texto livre (OpenAI, JSON).
    */
   async processCaptureText(freeText: string): Promise<CaptureResultItem[]> {
     this.assertKey();
@@ -213,7 +210,7 @@ Regras: "order" começa em 1 e é sequencial; label em português; requiresPhoto
       return this.parseCaptureJson(raw);
     } catch (err) {
       this.log.warn(`processCaptureText falhou: ${String((err as Error).message)}`);
-      throw new InternalServerErrorException('Falha ao processar captura com o DeepSeek.');
+      throw new InternalServerErrorException('Falha ao processar captura com a OpenAI.');
     }
   }
 

@@ -197,6 +197,8 @@ export class InvoiceService {
         clientName: dto.clientName,
         clientEmail: dto.clientEmail,
         clientPhone: dto.clientPhone ?? null,
+        clientNif: dto.clientNif?.trim() || null,
+        clientAddress: dto.clientAddress?.trim() || null,
         subtotal: new Prisma.Decimal(subtotal),
         feePercent: new Prisma.Decimal(feePercent),
         feeAmount: new Prisma.Decimal(feeAmount),
@@ -302,6 +304,14 @@ export class InvoiceService {
             dto.clientPhone !== undefined
               ? dto.clientPhone
               : existing.clientPhone,
+          clientNif:
+            dto.clientNif !== undefined
+              ? dto.clientNif?.trim() || null
+              : existing.clientNif,
+          clientAddress:
+            dto.clientAddress !== undefined
+              ? dto.clientAddress?.trim() || null
+              : existing.clientAddress,
           subtotal: new Prisma.Decimal(subtotal),
           feePercent: new Prisma.Decimal(feePercent),
           feeAmount: new Prisma.Decimal(feeAmount),
@@ -482,6 +492,8 @@ export class InvoiceService {
 
     await this.invalidateInvoiceAdminListCache();
 
+    this.eventEmitter.emit('invoice.sent', { invoiceId });
+
     return { url, publicToken };
   }
 
@@ -549,6 +561,8 @@ export class InvoiceService {
           clientName: true,
           clientEmail: true,
           clientPhone: true,
+          clientNif: true,
+          clientAddress: true,
           status: true,
           subtotal: true,
           feePercent: true,
@@ -559,6 +573,10 @@ export class InvoiceService {
           paidAt: true,
           notes: true,
           stripePaymentLinkUrl: true,
+          toconlineDocId: true,
+          toconlineDocNumber: true,
+          toconlineStatus: true,
+          toconlinePdfUrl: true,
           createdAt: true,
           project: { select: { id: true, title: true } },
         },

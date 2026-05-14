@@ -7,10 +7,11 @@ import { InvoiceController } from './invoice.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ToconlineModule } from '../toconline/toconline.module';
 import { RolesGuard } from '../../common/guards/roles.guard';
 
 @Module({
-  imports: [PrismaModule, NotificationsModule],
+  imports: [PrismaModule, NotificationsModule, ToconlineModule],
   controllers: [PaymentsController, InvoiceController, StripeWebhookController],
   providers: [StripeService, PaymentsService, InvoiceService, RolesGuard],
   exports: [PaymentsService, StripeService, InvoiceService],

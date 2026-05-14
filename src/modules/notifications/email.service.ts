@@ -13,6 +13,16 @@ export type SendInvoiceChargeEmailParams = {
   notes: string | null;
 };
 
+export type SendFiscalInvoiceEmailParams = {
+  to: string;
+  clientName: string;
+  contractorName: string;
+  projectTitle: string;
+  internalNumber: string;
+  fiscalNumber: string | null;
+  pdfUrl: string;
+};
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -96,6 +106,64 @@ export class EmailService {
     }
 
     this.logger.log(`E-mail de cobrança enviado para ${params.to} (${params.invoiceNumber})`);
+    return { sent: true };
+  }
+
+  /** PDF fiscal (Supabase) — link no e-mail; sem RESEND, não envia. */
+  async sendFiscalInvoiceEmail(
+    params: SendFiscalInvoiceEmailParams,
+  ): Promise<{ sent: boolean; skippedReason?: string }> {
+    const apiKey = this.config.get<string>('RESEND_API_KEY')?.trim();
+    const from =
+      this.config.get<string>('RESEND_FROM_EMAIL')?.trim() ??
+      'OX Cobranças <onboarding@resend.dev>';
+
+    if (!apiKey) {
+      this.logger.warn(
+        'RESEND_API_KEY não definido — e-mail de fatura fiscal não enviado.',
+      );
+      return { sent: false, skippedReason: 'missing_resend_api_key' };
+    }
+
+    const fiscalLabel = params.fiscalNumber ?? params.internalNumber;
+    const subject = `${params.projectTitle} — Fatura fiscal ${fiscalLabel}`;
+
+    const html = `<!DOCTYPE html>
+<html lang="pt">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;line-height:1.5;color:#111;max-width:32rem;margin:0 auto;padding:24px">
+  <p>Olá ${this.escapeHtml(params.clientName)},</p>
+  <p><strong>${this.escapeHtml(params.contractorName)}</strong> emitiu a fatura fiscal referente ao projeto <strong>${this.escapeHtml(params.projectTitle)}</strong> (referência interna ${this.escapeHtml(params.internalNumber)}).</p>
+  <p style="margin:24px 0">
+    <a href="${params.pdfUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Descarregar PDF fiscal</a>
+  </p>
+  <p style="font-size:12px;color:#888">Documento comunicado à Autoridade Tributária (AT) via TOConline.</p>
+</body>
+</html>`;
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: [params.to],
+        subject,
+        html,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      this.logger.error(
+        `Resend (fiscal) falhou (${res.status}): ${errText.slice(0, 500)}`,
+      );
+      return { sent: false, skippedReason: `resend_http_${res.status}` };
+    }
+
+    this.logger.log(`E-mail fiscal enviado para ${params.to} (${fiscalLabel})`);
     return { sent: true };
   }
 }

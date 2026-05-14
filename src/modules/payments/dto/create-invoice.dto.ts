@@ -54,6 +54,16 @@ export class CreateInvoiceDto {
   @IsString()
   clientPhone?: string;
 
+  @ApiPropertyOptional({ description: 'NIF do cliente (faturação TOConline / AT)' })
+  @IsOptional()
+  @IsString()
+  clientNif?: string;
+
+  @ApiPropertyOptional({ description: 'Morada do cliente (opcional, fiscal)' })
+  @IsOptional()
+  @IsString()
+  clientAddress?: string;
+
   @ApiPropertyOptional({ description: 'Data de vencimento (ISO)' })
   @IsOptional()
   @IsDateString()

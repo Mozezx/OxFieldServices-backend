@@ -749,9 +749,15 @@ model Invoice {
   phase       ProjectPhase? @relation(fields: [phaseId], references: [id], onDelete: SetNull)
 
   // Destinatário (cliente do contratante — pode ser externo)
-  clientName  String
-  clientEmail String
-  clientPhone String?
+  clientName    String
+  clientEmail   String
+  clientPhone   String?
+  /// NIF do cliente final (faturação TOConline / AT)
+  clientNif     String?
+  clientAddress String?
+
+  /// ID do cliente no TOConline (cache por invoice)
+  toconlineClientId String?
 
   // Valores
   subtotal    Decimal @db.Decimal(12, 2)
@@ -771,6 +777,13 @@ model Invoice {
 
   notes String?
   items InvoiceItem[]
+
+  /// TOConline — documento fiscal
+  toconlineDocId     String?
+  toconlineDocNumber String?
+  toconlineStatus    String?
+  toconlinePdfUrl    String?
+  toconlineSentAt    DateTime?
 
   escrowTxn EscrowTxn?
 

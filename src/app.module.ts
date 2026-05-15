@@ -31,6 +31,7 @@ import { CrewsModule } from './modules/crews/crews.module';
 import { CaptureModule } from './modules/capture/capture.module';
 import { CacheModule } from './cache/cache.module';
 import { HubspotModule } from './modules/hubspot/hubspot.module';
+import { InspectorModule } from './modules/inspector/inspector.module';
 
 @Module({
   imports: [
@@ -92,6 +93,7 @@ import { HubspotModule } from './modules/hubspot/hubspot.module';
     CrewsModule,
     CaptureModule,
     HubspotModule,
+    InspectorModule,
   ],
   controllers: [AppController],
   providers: [AppService],

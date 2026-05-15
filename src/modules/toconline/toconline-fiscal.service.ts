@@ -67,15 +67,6 @@ export class ToconlineFiscalService {
           toconlineSentAt: new Date(),
         },
       });
-      const pdfUrl = await this.downloadAndStorePdf(inv.toconlineDocId, invoiceId);
-      if (pdfUrl) {
-        await this.prisma.invoice.update({
-          where: { id: invoiceId },
-          data: { toconlinePdfUrl: pdfUrl },
-        });
-      }
-      await this.invalidateInvoiceCaches();
-      return { ok: true, message: 'Comunicação AT concluída' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await this.prisma.invoice.update({
@@ -86,6 +77,21 @@ export class ToconlineFiscalService {
       await this.invalidateInvoiceCaches();
       return { ok: false, message: msg };
     }
+
+    try {
+      const pdfUrl = await this.downloadAndStorePdf(inv.toconlineDocId, invoiceId);
+      if (pdfUrl) {
+        await this.prisma.invoice.update({
+          where: { id: invoiceId },
+          data: { toconlinePdfUrl: pdfUrl },
+        });
+      }
+    } catch (e) {
+      this.logStructuredError(invoiceId, 'communicate_at_pdf', e);
+    }
+
+    await this.invalidateInvoiceCaches();
+    return { ok: true, message: 'Comunicação AT concluída' };
   }
 
   async pullFiscalPdfFromToconline(

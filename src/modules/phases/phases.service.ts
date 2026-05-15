@@ -161,8 +161,8 @@ export class PhasesService {
   }
 
   /**
-   * Atualiza o status de uma fase (modelo documentação — sem validação financeira).
-   * Transições: pending → in_progress → completed
+   * Atualiza o status de uma fase.
+   * Transições: pending → in_progress → under_review → completed (ou under_review → in_progress em rejeição)
    */
   async updateStatus(id: string, userId: string, dto: UpdatePhaseStatusDto) {
     const phase = await this.prisma.projectPhase.findUnique({
@@ -206,8 +206,9 @@ export class PhasesService {
       throw new ForbiddenException('Usuário não encontrado');
     }
 
-    if (newStatus === 'in_progress' || newStatus === 'completed') {
-      if (user.role !== 'admin') {
+    // Worker pode mover in_progress → under_review
+    if (newStatus === 'in_progress' || newStatus === 'under_review') {
+      if (user.role !== 'admin' && user.role !== 'inspector') {
         const worker = await this.prisma.worker.findUnique({ where: { userId } });
         const isContractWorker = worker != null && phase.project.contract?.workerId === worker.id;
         const isAssignedWorker = worker != null && phase.assignedWorkerId != null && phase.assignedWorkerId === worker.id;
@@ -222,16 +223,40 @@ export class PhasesService {
       }
     }
 
+    // Apenas inspector ou admin pode aprovar (under_review → completed)
+    if (newStatus === 'completed') {
+      if (user.role !== 'admin' && user.role !== 'inspector') {
+        throw new ForbiddenException(
+          'Apenas inspetor ou admin pode aprovar uma fase',
+        );
+      }
+    }
+
     const updated = await this.prisma.projectPhase.update({
       where: { id },
-      data: { status: newStatus },
+      data: {
+        status: newStatus,
+        // Limpa o comentário de rejeição ao resubmeter
+        ...(newStatus === 'under_review' ? { rejectionComment: null } : {}),
+      },
     });
 
     if (currentStatus === 'pending' && newStatus === 'in_progress') {
       this.eventEmitter.emit('phase.started', { phaseId: id });
     }
 
+    if (newStatus === 'under_review') {
+      this.eventEmitter.emit('phase.under_review', {
+        phaseId: id,
+        projectId: phase.projectId,
+      });
+    }
+
     if (newStatus === 'completed') {
+      this.eventEmitter.emit('phase.validated', {
+        phaseId: id,
+        projectId: phase.projectId,
+      });
       await this.maybeAdvanceProjectToClosing(phase.projectId);
     }
 
@@ -278,7 +303,8 @@ export class PhasesService {
   ): boolean {
     const transitions: Record<PhaseStatus, PhaseStatus[]> = {
       pending: ['in_progress'],
-      in_progress: ['completed'],
+      in_progress: ['under_review'],
+      under_review: ['completed', 'in_progress'],
       completed: [],
     };
 

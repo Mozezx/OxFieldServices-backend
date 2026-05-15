@@ -788,11 +788,104 @@ export class NotificationsListeners {
     }
   }
 
+  @OnEvent('phase.under_review')
+  async onPhaseUnderReview(payload: { phaseId: string; projectId: string }) {
+    try {
+      const phase = await this.loadPhaseWithWorker(payload.phaseId);
+      if (!phase) return;
+      const admins = await this.notifications.getAdminUserIds();
+      const inspectors = await this.getInspectorUserIds();
+      const targets = [...new Set([...admins, ...inspectors])];
+      if (targets.length === 0) return;
+      await this.notifications.createForUsers(targets, {
+        type: 'phase_under_review',
+        title: 'Fase aguardando inspeção',
+        body: `A fase "${phase.name}" do projeto "${phase.project.title}" foi enviada para revisão de qualidade.`,
+        entityType: 'phase',
+        entityId: payload.phaseId,
+        data: { phaseName: phase.name, projectTitle: phase.project.title, projectId: payload.projectId },
+      });
+    } catch (e) {
+      this.logger.warn(`phase.under_review listener: ${String(e)}`);
+    }
+  }
+
+  @OnEvent('phase.validated')
+  async onPhaseValidated(payload: { phaseId: string; projectId: string }) {
+    try {
+      const phase = await this.loadPhaseWithWorker(payload.phaseId);
+      if (!phase) return;
+      const workerUserId = phase.project.contract?.worker?.userId;
+      if (!workerUserId) return;
+      await this.notifications.create({
+        userId: workerUserId,
+        type: 'phase_validated',
+        title: 'Fase aprovada',
+        body: `A fase "${phase.name}" do projeto "${phase.project.title}" foi aprovada pelo inspetor de qualidade.`,
+        entityType: 'phase',
+        entityId: payload.phaseId,
+        data: { phaseName: phase.name, projectTitle: phase.project.title, projectId: payload.projectId },
+      });
+    } catch (e) {
+      this.logger.warn(`phase.validated listener: ${String(e)}`);
+    }
+  }
+
+  @OnEvent('phase.rejected')
+  async onPhaseRejected(payload: { phaseId: string; projectId: string; comment: string }) {
+    try {
+      const phase = await this.loadPhaseWithWorker(payload.phaseId);
+      if (!phase) return;
+      const workerUserId = phase.project.contract?.worker?.userId;
+      if (!workerUserId) return;
+      await this.notifications.create({
+        userId: workerUserId,
+        type: 'phase_rejected',
+        title: 'Fase rejeitada — correção necessária',
+        body: `A fase "${phase.name}" foi devolvida para correção: ${payload.comment}`,
+        entityType: 'phase',
+        entityId: payload.phaseId,
+        data: { phaseName: phase.name, projectTitle: phase.project.title, projectId: payload.projectId, comment: payload.comment },
+      });
+    } catch (e) {
+      this.logger.warn(`phase.rejected listener: ${String(e)}`);
+    }
+  }
+
+  private async getInspectorUserIds(): Promise<string[]> {
+    const rows = await this.prisma.user.findMany({
+      where: { role: 'inspector' },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  }
+
   private async loadPhaseBasics(phaseId: string) {
     return this.prisma.projectPhase.findUnique({
       where: { id: phaseId },
       select: {
         name: true,
+        project: {
+          select: {
+            title: true,
+            clientId: true,
+            contract: {
+              select: {
+                worker: { select: { userId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async loadPhaseWithWorker(phaseId: string) {
+    return this.prisma.projectPhase.findUnique({
+      where: { id: phaseId },
+      select: {
+        name: true,
+        assignedWorkerId: true,
         project: {
           select: {
             title: true,

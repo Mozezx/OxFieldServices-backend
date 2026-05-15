@@ -12,6 +12,7 @@ enum UserRole {
   client
   worker
   admin
+  inspector
 }
 
 enum ProjectStatus {
@@ -28,6 +29,7 @@ enum ProjectStatus {
 enum PhaseStatus {
   pending
   in_progress
+  under_review
   completed
 }
 
@@ -421,6 +423,8 @@ model ProjectPhase {
 
   assignedWorkerId String?
   assignedWorker   Worker? @relation("PhaseWorker", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
+
+  rejectionComment String?
 
   evidences       PhaseEvidence[]
   checklists      PhaseChecklist[]

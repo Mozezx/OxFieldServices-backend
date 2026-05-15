@@ -18,15 +18,15 @@ export class InspectorService {
   async getPendingReviews() {
     const phases = await this.prisma.projectPhase.findMany({
       where: { status: 'under_review' },
-      orderBy: { project: { updatedAt: 'asc' } },
+      orderBy: { project: { createdAt: 'asc' } },
       include: {
         project: {
           select: {
             id: true,
             title: true,
-            address: true,
+            location: true,
             status: true,
-            updatedAt: true,
+            createdAt: true,
           },
         },
         evidences: {
@@ -42,8 +42,7 @@ export class InspectorService {
           take: 10,
         },
         checklists: {
-          select: { id: true, label: true, checked: true, requiresPhoto: true, order: true },
-          orderBy: { order: 'asc' },
+          select: { id: true, items: true, source: true },
         },
         assignedWorker: {
           select: {
@@ -57,7 +56,6 @@ export class InspectorService {
     return phases.map((phase) => ({
       ...phase,
       amount: Number(phase.amount),
-      // Coordenadas da obra: usa a primeira evidência com GPS, fallback null
       latitude: phase.evidences.find((e) => e.latitude != null)?.latitude ?? null,
       longitude: phase.evidences.find((e) => e.longitude != null)?.longitude ?? null,
     }));

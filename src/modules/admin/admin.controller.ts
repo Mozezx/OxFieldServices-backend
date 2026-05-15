@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Delete,
   Body,
@@ -14,6 +15,7 @@ import { AdminService } from './admin.service';
 import { ToconlineFiscalService } from '../toconline/toconline-fiscal.service';
 import { LookupOrCreateClientDto } from './dto/lookup-or-create-client.dto';
 import { CreateWorkerDto } from './dto/create-worker.dto';
+import { CreateInspectorDto } from './dto/create-inspector.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -37,6 +39,27 @@ export class AdminController {
   @ApiOperation({ summary: 'Criar worker (stub até primeiro sync de auth)' })
   createWorker(@Body() dto: CreateWorkerDto) {
     return this.adminService.createWorker(dto);
+  }
+
+  @Get('inspectors')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Listar inspetores' })
+  listInspectors() {
+    return this.adminService.listInspectors();
+  }
+
+  @Post('inspectors')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Criar inspetor de qualidade' })
+  createInspector(@Body() dto: CreateInspectorDto) {
+    return this.adminService.createInspector(dto);
+  }
+
+  @Delete('inspectors/:inspectorId')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Eliminar inspetor e utilizador associado' })
+  deleteInspector(@Param('inspectorId') inspectorId: string) {
+    return this.adminService.deleteInspector(inspectorId);
   }
 
   @Post('invoices/:invoiceId/communicate-at')

@@ -11,6 +11,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LookupOrCreateClientDto } from './dto/lookup-or-create-client.dto';
 import { CreateWorkerDto } from './dto/create-worker.dto';
+import { CreateInspectorDto } from './dto/create-inspector.dto';
 import { randomUUID } from 'crypto';
 
 @Injectable()
@@ -168,6 +169,111 @@ export class AdminService {
       }
       throw err;
     }
+  }
+
+  async listInspectors() {
+    return this.prisma.user.findMany({
+      where: { role: 'inspector' },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        createdAt: true,
+        avatarUrl: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createInspector(dto: CreateInspectorDto) {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Este e-mail já está em uso na plataforma');
+    }
+
+    const supabase = this.getSupabaseAdmin();
+    const displayName = dto.name.trim();
+    const password = dto.password.trim();
+
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: displayName },
+    });
+
+    if (authError || !authData.user) {
+      const msg = authError?.message ?? 'Falha ao criar utilizador no Supabase';
+      if (/already|registered|exists|duplicate/i.test(msg)) {
+        throw new ConflictException(
+          'Este e-mail já está registado no Supabase. Use outro e-mail ou remova a conta em Authentication.',
+        );
+      }
+      throw new BadRequestException(msg);
+    }
+
+    const authId = authData.user.id;
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          email,
+          name: displayName,
+          phone: dto.phone?.trim() || undefined,
+          role: 'inspector',
+          authId,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role: true,
+          authId: true,
+        },
+      });
+
+      return { user, isNew: true as const };
+    } catch (err) {
+      const { error: delErr } = await supabase.auth.admin.deleteUser(authId);
+      if (delErr) {
+        this.logger.error(
+          `Revert Supabase user falhou após erro Prisma (authId=${authId}): ${delErr.message}`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  async deleteInspector(inspectorUserId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: inspectorUserId },
+      select: { id: true, role: true, authId: true },
+    });
+    if (!user) throw new NotFoundException('Inspetor não encontrado');
+    if (user.role !== 'inspector') {
+      throw new BadRequestException('O utilizador não é um inspetor');
+    }
+
+    await this.prisma.user.delete({ where: { id: inspectorUserId } });
+
+    if (user.authId) {
+      const supabase = this.getSupabaseAdmin();
+      const { error } = await supabase.auth.admin.deleteUser(user.authId);
+      if (error) {
+        this.logger.warn(
+          `Prisma user removido mas falha ao remover Supabase auth (authId=${user.authId}): ${error.message}`,
+        );
+      }
+    }
+
+    return { deleted: true as const };
   }
 
   /**

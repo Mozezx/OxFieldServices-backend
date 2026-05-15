@@ -48,6 +48,15 @@ export class AdminController {
     return this.toconlineFiscal.retryCommunicateToAT(invoiceId);
   }
 
+  @Post('invoices/:invoiceId/fiscal-pdf')
+  @Roles('admin')
+  @ApiOperation({
+    summary: 'Buscar PDF fiscal diretamente no TOConline e atualizar a invoice',
+  })
+  pullInvoiceFiscalPdf(@Param('invoiceId') invoiceId: string) {
+    return this.toconlineFiscal.pullFiscalPdfFromToconline(invoiceId);
+  }
+
   @Delete('workers/:workerId')
   @Roles('admin')
   @ApiOperation({ summary: 'Eliminar worker e utilizador associado' })

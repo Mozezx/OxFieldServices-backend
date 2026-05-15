@@ -8,13 +8,20 @@ import {
 } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Invoice, InvoiceFeeModel, InvoiceStatus, Prisma } from '@prisma/client';
+import {
+  Invoice,
+  InvoiceFeeModel,
+  InvoiceItem,
+  InvoiceStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../cache/cache.service';
 import { StripeService } from './stripe.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { EmailService } from '../notifications/email.service';
+import { ToconlineAuthService } from '../toconline/toconline-auth.service';
 
 export type InvoiceStats = {
   counts: Record<InvoiceStatus, number>;
@@ -38,6 +45,7 @@ export class InvoiceService {
     private readonly eventEmitter: EventEmitter2,
     private readonly emailService: EmailService,
     private readonly cache: CacheService,
+    private readonly toconlineAuth: ToconlineAuthService,
   ) {}
 
   private async invalidateInvoiceAdminListCache(): Promise<void> {
@@ -118,6 +126,35 @@ export class InvoiceService {
     const totalAmount =
       Math.round((subtotal + feeAmount + Number.EPSILON) * 100) / 100;
     return { feeAmount, totalAmount };
+  }
+
+  private assertToconlineFiscalReady(
+    invoice: Invoice & { items: InvoiceItem[] },
+  ): void {
+    if (!this.toconlineAuth.isEnabled()) return;
+
+    const missing: string[] = [];
+    if (!invoice.clientName.trim()) missing.push('nome do cliente');
+    if (!invoice.clientEmail.trim()) missing.push('e-mail do cliente');
+    if (!invoice.clientNif?.trim()) missing.push('NIF do cliente');
+    if (!invoice.clientAddress?.trim()) missing.push('morada fiscal do cliente');
+    if (invoice.items.length === 0) missing.push('pelo menos uma linha da cobrança');
+
+    const invalidLine = invoice.items.find(
+      (item) =>
+        !item.description.trim() ||
+        Number(item.quantity) <= 0 ||
+        Number(item.unitPrice) < 0,
+    );
+    if (invalidLine) {
+      missing.push('descrição, quantidade e preço válidos em todas as linhas');
+    }
+
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Antes de enviar ao TOConline, preencha: ${missing.join(', ')}.`,
+      );
+    }
   }
 
   async generateInvoiceNumber(): Promise<string> {
@@ -426,6 +463,8 @@ export class InvoiceService {
     if (inv.status === 'cancelled') {
       throw new BadRequestException('Invoice cancelada');
     }
+
+    this.assertToconlineFiscalReady(inv);
 
     const publicToken = this.signPublicToken(invoiceId);
 

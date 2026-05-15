@@ -88,6 +88,38 @@ export class ToconlineFiscalService {
     }
   }
 
+  async pullFiscalPdfFromToconline(
+    invoiceId: string,
+  ): Promise<{ ok: boolean; message: string; pdfUrl?: string }> {
+    if (!this.auth.isEnabled()) {
+      return { ok: false, message: 'TOConline não está configurado' };
+    }
+
+    const inv = await this.prisma.invoice.findUnique({
+      where: { id: invoiceId },
+    });
+    if (!inv?.toconlineDocId) {
+      return { ok: false, message: 'Invoice sem documento TOConline criado' };
+    }
+
+    try {
+      const pdfUrl = await this.downloadAndStorePdf(inv.toconlineDocId, invoiceId);
+      if (!pdfUrl) return { ok: false, message: 'TOConline não devolveu PDF' };
+
+      await this.prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { toconlinePdfUrl: pdfUrl },
+      });
+      await this.invalidateInvoiceCaches();
+
+      return { ok: true, message: 'PDF fiscal atualizado', pdfUrl };
+    } catch (e) {
+      this.logStructuredError(invoiceId, 'pull_pdf', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, message: msg };
+    }
+  }
+
   async orchestrateFiscalFlow(
     invoiceId: string,
     trigger: 'sent' | 'paid',

@@ -10,8 +10,7 @@ import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { Prisma, UserRole } from '@prisma/client';
 import { createClient } from '@supabase/supabase-js';
-import { mkdir, unlink, writeFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { extname } from 'path';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EvidenceGpsDto } from './dto/evidence-gps.dto';
@@ -97,7 +96,6 @@ export class EvidenceService {
     }
 
     const isVideo = file.mimetype.startsWith('video/');
-    let publicUrl: string;
     if (idempotencyKey) {
       const existing = await this.prisma.phaseEvidence.findFirst({
         where: {
@@ -110,40 +108,29 @@ export class EvidenceService {
       if (existing) return existing;
     }
 
-    if (isVideo) {
-      publicUrl = await this.saveVideoLocally(
-        phase.projectId,
-        phaseId,
-        file,
-        req,
-        idempotencyKey,
+    const ext = extname(file.originalname) || (isVideo ? '.mp4' : '.bin');
+    const filename = idempotencyKey
+      ? `${idempotencyKey}${ext}`
+      : `${Date.now()}${ext}`;
+    const storagePath = `phases/${phaseId}/${filename}`;
+
+    const { error: uploadError } = await this.supabase.storage
+      .from('evidences')
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: Boolean(idempotencyKey),
+        cacheControl: 'public, max-age=31536000, immutable',
+      });
+
+    if (uploadError) {
+      throw new InternalServerErrorException(
+        `Falha no upload para o storage: ${uploadError.message}`,
       );
-    } else {
-      const ext = file.originalname.split('.').pop();
-      const filename = idempotencyKey
-        ? `${idempotencyKey}.${ext}`
-        : `${Date.now()}.${ext}`;
-      const path = `phases/${phaseId}/${filename}`;
-
-      const { error } = await this.supabase.storage
-        .from('evidences')
-        .upload(path, file.buffer, {
-          contentType: file.mimetype,
-          upsert: Boolean(idempotencyKey),
-          cacheControl: 'public, max-age=31536000, immutable',
-        });
-
-      if (error) {
-        throw new InternalServerErrorException(
-          `Falha no upload para o storage: ${error.message}`,
-        );
-      }
-
-      const {
-        data: { publicUrl: storageUrl },
-      } = this.supabase.storage.from('evidences').getPublicUrl(path);
-      publicUrl = storageUrl;
     }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from('evidences').getPublicUrl(storagePath);
 
     const evidence = await this.prisma.phaseEvidence.create({
       data: {
@@ -155,7 +142,7 @@ export class EvidenceService {
       },
     });
 
-    if (!isVideo && file.mimetype.startsWith('image/')) {
+    if (file.mimetype.startsWith('image/')) {
       void this.enqueueAiCaption(evidence.id);
     }
 
@@ -441,69 +428,6 @@ export class EvidenceService {
     return data;
   }
 
-  private readMp4DurationSeconds(buffer: Buffer): number | null {
-    const mvhd = this.findBox(buffer, ['moov', 'mvhd']);
-    if (!mvhd) return null;
-
-    const version = mvhd[0];
-    if (version === 0) {
-      if (mvhd.length < 20) return null;
-      const timescale = mvhd.readUInt32BE(12);
-      const duration = mvhd.readUInt32BE(16);
-      if (!timescale) return null;
-      return duration / timescale;
-    }
-
-    if (version === 1) {
-      if (mvhd.length < 32) return null;
-      const timescale = mvhd.readUInt32BE(20);
-      const duration = Number(mvhd.readBigUInt64BE(24));
-      if (!timescale) return null;
-      return duration / timescale;
-    }
-
-    return null;
-  }
-
-  private findBox(buffer: Buffer, path: string[]): Buffer | null {
-    let current = buffer;
-    for (const type of path) {
-      const next = this.findChildBox(current, type);
-      if (!next) return null;
-      current = next;
-    }
-    return current;
-  }
-
-  private findChildBox(buffer: Buffer, targetType: string): Buffer | null {
-    let offset = 0;
-    while (offset + 8 <= buffer.length) {
-      let size = buffer.readUInt32BE(offset);
-      const type = buffer.subarray(offset + 4, offset + 8).toString('ascii');
-      let headerSize = 8;
-
-      if (size === 1) {
-        if (offset + 16 > buffer.length) return null;
-        size = Number(buffer.readBigUInt64BE(offset + 8));
-        headerSize = 16;
-      } else if (size === 0) {
-        size = buffer.length - offset;
-      }
-
-      if (size < headerSize) return null;
-      const end = offset + size;
-      if (end > buffer.length) return null;
-
-      if (type === targetType) {
-        return buffer.subarray(offset + headerSize, end);
-      }
-
-      offset = end;
-    }
-
-    return null;
-  }
-
   async findByPhase(phaseId: string) {
     const phase = await this.prisma.projectPhase.findUnique({
       where: { id: phaseId },
@@ -538,88 +462,14 @@ export class EvidenceService {
       );
     }
 
-    if (this.isLocalEvidenceUrl(evidence.url)) {
-      await this.removeLocalEvidence(evidence.url);
-    } else {
-      const storagePath = this.extractSupabasePath(evidence.url);
-      if (storagePath) {
-        await this.supabase.storage.from('evidences').remove([storagePath]);
-      }
+    const storagePath = this.extractSupabasePath(evidence.url);
+    if (storagePath) {
+      await this.supabase.storage.from('evidences').remove([storagePath]);
     }
 
     await this.prisma.phaseEvidence.delete({ where: { id: evidenceId } });
 
     return { deleted: true };
-  }
-
-  private async saveVideoLocally(
-    projectId: string,
-    phaseId: string,
-    file: Express.Multer.File,
-    req?: any,
-    idempotencyKey?: string,
-  ): Promise<string> {
-    const evidenceDir = join(
-      process.cwd(),
-      'uploads',
-      'projects',
-      projectId,
-      'phases',
-      phaseId,
-    );
-    await mkdir(evidenceDir, { recursive: true });
-
-    const ext = extname(file.originalname) || '.mp4';
-    const filename = idempotencyKey
-      ? `${idempotencyKey}${ext}`
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
-    const absolutePath = join(evidenceDir, filename);
-    await writeFile(absolutePath, file.buffer);
-
-    const baseUrl = this.resolvePublicBaseUrl(req);
-    return `${baseUrl}/uploads/projects/${projectId}/phases/${phaseId}/${filename}`;
-  }
-
-  private resolvePublicBaseUrl(req?: any): string {
-    if (process.env.APP_PUBLIC_URL) {
-      return process.env.APP_PUBLIC_URL.replace(/\/$/, '');
-    }
-
-    const forwardedProto = req?.headers?.['x-forwarded-proto'];
-    const proto =
-      typeof forwardedProto === 'string'
-        ? forwardedProto.split(',')[0].trim()
-        : req?.protocol ?? 'http';
-    const host = req?.headers?.host as string | undefined;
-    if (host) {
-      return `${proto}://${host}`;
-    }
-
-    if (process.env.APP_URL) {
-      return process.env.APP_URL.replace(/\/$/, '');
-    }
-
-    return `http://localhost:${process.env.PORT ?? 3000}`;
-  }
-
-  private isLocalEvidenceUrl(url: string): boolean {
-    return (
-      url.includes('/uploads/evidences/') || url.includes('/uploads/projects/')
-    );
-  }
-
-  private async removeLocalEvidence(url: string): Promise<void> {
-    try {
-      const parsed = new URL(url);
-      const marker = '/uploads/';
-      const idx = parsed.pathname.indexOf(marker);
-      if (idx === -1) return;
-      const rel = parsed.pathname.slice(idx + marker.length);
-      const abs = join(process.cwd(), 'uploads', rel);
-      await unlink(abs);
-    } catch {
-      // Falha ao remover arquivo local não bloqueia exclusão do registro.
-    }
   }
 
   private extractSupabasePath(url: string): string | null {

@@ -6,8 +6,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
-import { extname, join } from 'path';
-import { mkdir, writeFile } from 'fs/promises';
+import { extname } from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 
 const ALLOWED_MIME_TYPES = [
@@ -74,34 +73,31 @@ export class ProjectEvidenceService {
     await this.assertProjectAccess(projectId, userId, ['worker', 'admin']);
 
     const isVideo = file.mimetype.startsWith('video/');
-    let publicUrl: string;
     const latitude = this.parseOptionalFloat(gps?.latitude);
     const longitude = this.parseOptionalFloat(gps?.longitude);
     const gpsAccuracy = this.parseOptionalFloat(gps?.gpsAccuracy);
     const capturedAt = gps?.capturedAt ? new Date(gps.capturedAt) : undefined;
 
-    if (isVideo) {
-      publicUrl = await this.saveVideoLocally(projectId, file, req);
-    } else {
-      const ext = file.originalname.split('.').pop();
-      const filename = `${Date.now()}.${ext}`;
-      const path = `projects/${projectId}/${filename}`;
+    const ext = extname(file.originalname) || (isVideo ? '.mp4' : '.bin');
+    const filename = `${Date.now()}${ext}`;
+    const storagePath = `projects/${projectId}/${filename}`;
 
-      const { error } = await this.supabase.storage
-        .from('evidences')
-        .upload(path, file.buffer, { contentType: file.mimetype });
+    const { error: uploadError } = await this.supabase.storage
+      .from('evidences')
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        cacheControl: 'public, max-age=31536000, immutable',
+      });
 
-      if (error) {
-        throw new InternalServerErrorException(
-          `Falha no upload para o storage: ${error.message}`,
-        );
-      }
-
-      const {
-        data: { publicUrl: storageUrl },
-      } = this.supabase.storage.from('evidences').getPublicUrl(path);
-      publicUrl = storageUrl;
+    if (uploadError) {
+      throw new InternalServerErrorException(
+        `Falha no upload para o storage: ${uploadError.message}`,
+      );
     }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from('evidences').getPublicUrl(storagePath);
 
     return this.prisma.projectEvidence.create({
       data: {
@@ -152,14 +148,9 @@ export class ProjectEvidenceService {
       throw new ForbiddenException('Sem permissão para remover esta evidência');
     }
 
-    if (
-      !evidence.url.includes('/uploads/evidences/') &&
-      !evidence.url.includes('/uploads/projects/')
-    ) {
-      const storagePath = this.extractSupabasePath(evidence.url);
-      if (storagePath) {
-        await this.supabase.storage.from('evidences').remove([storagePath]);
-      }
+    const storagePath = this.extractSupabasePath(evidence.url);
+    if (storagePath) {
+      await this.supabase.storage.from('evidences').remove([storagePath]);
     }
 
     await this.prisma.projectEvidence.delete({ where: { id: evidenceId } });
@@ -296,22 +287,6 @@ export class ProjectEvidenceService {
     }
 
     throw new ForbiddenException('Sem permissão para este projeto');
-  }
-
-  private async saveVideoLocally(
-    projectId: string,
-    file: Express.Multer.File,
-    req?: any,
-  ): Promise<string> {
-    const evidenceDir = join(process.cwd(), 'uploads', 'projects', projectId);
-    await mkdir(evidenceDir, { recursive: true });
-    const ext = extname(file.originalname) || '.mp4';
-    const filename = `${Date.now()}${ext}`;
-    await writeFile(join(evidenceDir, filename), file.buffer);
-    const baseUrl = req?.headers?.host
-      ? `${req.protocol ?? 'http'}://${req.headers.host}`
-      : process.env.APP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
-    return `${baseUrl}/uploads/projects/${projectId}/${filename}`;
   }
 
   private extractSupabasePath(url: string): string | null {

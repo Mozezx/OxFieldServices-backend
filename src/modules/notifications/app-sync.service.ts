@@ -62,10 +62,20 @@ export class AppSyncService {
         const done = (err?: Error) => {
           if (settled) return;
           settled = true;
-          void this.client!.removeChannel(channel).finally(() => {
+          // removeChannel pode lançar TypeError internamente (connToClose.close)
+          // quando o subscribe faz timeout antes do WebSocket estar pronto.
+          // Capturamos o erro para evitar unhandled rejection que derruba o processo.
+          try {
+            void this.client!.removeChannel(channel)
+              .catch(() => {})
+              .finally(() => {
+                if (err) reject(err);
+                else resolve();
+              });
+          } catch {
             if (err) reject(err);
             else resolve();
-          });
+          }
         };
 
         channel.subscribe(

@@ -165,12 +165,12 @@ export class NotificationCopyService {
           };
 
         case 'phase_evidence_uploaded':
-          if (variant === 'admin') {
+          if (variant === 'admin' || variant === 'inspector') {
             return {
               title: this.t(locale, 'notifPhaseEvidenceUploadedAdminTitle'),
               body: interpolate(
                 this.t(locale, 'notifPhaseEvidenceUploadedAdminBody'),
-                { projectTitle, phaseName },
+                { projectTitle, phaseName, workerName: workerName || '—' },
               ),
             };
           }
@@ -178,7 +178,7 @@ export class NotificationCopyService {
             title: this.t(locale, 'notifPhaseEvidenceUploadedClientTitle'),
             body: interpolate(
               this.t(locale, 'notifPhaseEvidenceUploadedClientBody'),
-              { phaseName, projectTitle },
+              { phaseName, projectTitle, workerName: workerName || '—' },
             ),
           };
 

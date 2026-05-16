@@ -106,27 +106,38 @@ export class NotificationsListeners {
 
       const workerUserId = project.contract?.worker?.userId;
       const admins = await this.notifications.getAdminUserIds();
+      const inspectors = await this.getInspectorUserIds();
       const projectTitle = project.title;
       const { title, body } = this.projectStatusMessage(mapped, projectTitle);
+
+      const notifData = { from: payload.from, to: payload.to, projectTitle };
+
+      if (payload.to === 'closed') {
+        const closedTargets = [
+          ...new Set([
+            project.clientId,
+            ...(workerUserId ? [workerUserId] : []),
+            ...inspectors,
+          ]),
+        ];
+        await this.notifications.createForUsers(closedTargets, {
+          type: mapped,
+          title,
+          body,
+          entityType: 'project',
+          entityId: payload.projectId,
+          data: notifData,
+        });
+        return;
+      }
 
       const recipients = new Set<string>();
       recipients.add(project.clientId);
       if (workerUserId) recipients.add(workerUserId);
       admins.forEach((id) => recipients.add(id));
-
-      if (payload.to === 'closed') {
-        await this.notifications.createForUsers(
-          [project.clientId, ...(workerUserId ? [workerUserId] : [])],
-          {
-            type: mapped,
-            title,
-            body,
-            entityType: 'project',
-            entityId: payload.projectId,
-            data: { from: payload.from, to: payload.to, projectTitle },
-          },
-        );
-        return;
+      // inspectors receive project_activated, project_closing
+      if (mapped === 'project_activated' || mapped === 'project_closing') {
+        inspectors.forEach((id) => recipients.add(id));
       }
 
       await this.notifications.createForUsers([...recipients], {
@@ -135,7 +146,7 @@ export class NotificationsListeners {
         body,
         entityType: 'project',
         entityId: payload.projectId,
-        data: { from: payload.from, to: payload.to, projectTitle },
+        data: notifData,
       });
     } catch (e) {
       this.logger.warn(`project.status_changed listener: ${String(e)}`);
@@ -177,6 +188,7 @@ export class NotificationsListeners {
       const phase = await this.loadPhaseBasics(payload.phaseId);
       if (!phase) return;
       const admins = await this.notifications.getAdminUserIds();
+      const inspectors = await this.getInspectorUserIds();
       const ev = await this.prisma.phaseEvidence.findUnique({
         where: { id: payload.evidenceId },
         select: { url: true, type: true, uploader: { select: { name: true } } },
@@ -184,26 +196,28 @@ export class NotificationsListeners {
       const isImage =
         Boolean(ev?.type?.startsWith('image/')) ||
         /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(ev?.url ?? '');
+      const workerName = ev?.uploader?.name ?? '';
       const dataBase = {
         phaseName: phase.name,
         projectTitle: phase.project.title,
         projectId: payload.projectId,
         previewUrl: isImage ? (ev?.url ?? null) : null,
-        workerName: ev?.uploader?.name ?? null,
+        workerName,
       };
       await this.notifications.create({
         userId: phase.project.clientId,
         type: 'phase_evidence_uploaded',
-        title: 'Novas evidências',
-        body: `O trabalhador enviou evidências para a fase "${phase.name}" em "${phase.project.title}".`,
+        title: 'Novas atualizações',
+        body: `${workerName} enviou atualizações em ${phase.name}.`,
         entityType: 'phase',
         entityId: payload.phaseId,
         data: dataBase,
       });
-      await this.notifications.createForUsers(admins, {
+      const adminInspectorTargets = [...new Set([...admins, ...inspectors])];
+      await this.notifications.createForUsers(adminInspectorTargets, {
         type: 'phase_evidence_uploaded',
-        title: 'Evidências recebidas',
-        body: `Projeto "${phase.project.title}" — fase "${phase.name}".`,
+        title: 'Novas atualizações',
+        body: `${workerName} enviou atualizações em ${phase.name}.`,
         entityType: 'phase',
         entityId: payload.phaseId,
         data: { ...dataBase, variant: 'admin' },
@@ -223,6 +237,7 @@ export class NotificationsListeners {
   }) {
     try {
       const admins = await this.notifications.getAdminUserIds();
+      const inspectors = await this.getInspectorUserIds();
       const phase = await this.prisma.projectPhase.findUnique({
         where: { id: payload.phaseId },
         select: {
@@ -230,12 +245,18 @@ export class NotificationsListeners {
         },
       });
       const workerUserId = phase?.assignedWorker?.userId;
-      const targets = [...admins, ...(workerUserId ? [workerUserId] : [])];
+      const targets = [
+        ...new Set([
+          ...admins,
+          ...inspectors,
+          ...(workerUserId ? [workerUserId] : []),
+        ]),
+      ];
       if (targets.length === 0) return;
       await this.notifications.createForUsers(targets, {
         type: 'phase_client_commented',
-        title: 'Comentário do cliente',
-        body: `${payload.authorName} comentou na fase "${payload.phaseName}" — ${payload.projectTitle}.`,
+        title: 'Cliente comentou',
+        body: `O cliente comentou em ${payload.phaseName}.`,
         entityType: 'phase',
         entityId: payload.phaseId,
         data: {

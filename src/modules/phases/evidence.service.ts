@@ -14,6 +14,7 @@ import { extname } from 'path';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EvidenceGpsDto } from './dto/evidence-gps.dto';
+import { RegisterEvidenceDto } from './dto/register-evidence.dto';
 import { UpdateAnnotationsDto } from './dto/update-annotations.dto';
 import { CreateEvidenceCommentDto } from './dto/create-evidence-comment.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -150,6 +151,79 @@ export class EvidenceService {
       phaseId,
       evidenceId: evidence.id,
       projectId: phase.projectId,
+    });
+
+    return evidence;
+  }
+
+  /** Registra evidência já enviada diretamente ao Supabase Storage (upload direto). */
+  async register(
+    phaseId: string,
+    userId: string,
+    dto: RegisterEvidenceDto,
+    req?: any,
+  ) {
+    const idempotencyKey = this.extractIdempotencyKey(req);
+
+    if (!ALLOWED_MIME_TYPES.includes(dto.mimeType)) {
+      throw new BadRequestException(
+        'Tipo de arquivo não permitido. Use jpeg, png, webp ou vídeo (mp4, mov, webm, 3gp, avi, mkv).',
+      );
+    }
+
+    if (dto.size > MAX_FILE_SIZE) {
+      throw new BadRequestException('Arquivo excede o limite de 300 MB.');
+    }
+
+    const phase = await this.prisma.projectPhase.findUnique({
+      where: { id: phaseId },
+      include: { project: { select: { status: true, id: true } } },
+    });
+
+    if (!phase) throw new NotFoundException('Fase não encontrada');
+
+    if (phase.status === 'completed') {
+      throw new BadRequestException('Upload não permitido em fase já concluída.');
+    }
+
+    if (idempotencyKey) {
+      const existing = await this.prisma.phaseEvidence.findFirst({
+        where: {
+          phaseId,
+          uploadedBy: userId,
+          url: { contains: idempotencyKey },
+        },
+      });
+      if (existing) return existing;
+    }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from('evidences').getPublicUrl(dto.storagePath);
+
+    const evidence = await this.prisma.phaseEvidence.create({
+      data: {
+        phaseId,
+        type: dto.mimeType,
+        url: publicUrl,
+        uploadedBy: userId,
+        ...this.gpsToCreateData({
+          latitude: dto.latitude,
+          longitude: dto.longitude,
+          gpsAccuracy: dto.gpsAccuracy,
+          capturedAt: dto.capturedAt,
+        }),
+      },
+    });
+
+    if (dto.mimeType.startsWith('image/')) {
+      void this.enqueueAiCaption(evidence.id);
+    }
+
+    this.eventEmitter.emit('phase.evidence_uploaded', {
+      phaseId,
+      evidenceId: evidence.id,
+      projectId: phase.project.id,
     });
 
     return evidence;

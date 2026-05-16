@@ -115,6 +115,68 @@ export class ProjectEvidenceService {
     });
   }
 
+  async register(
+    projectId: string,
+    userId: string,
+    dto: {
+      storagePath: string;
+      mimeType: string;
+      size: number;
+      latitude?: number;
+      longitude?: number;
+      gpsAccuracy?: number;
+      capturedAt?: string;
+      note?: string;
+    },
+    idempotencyKey?: string,
+  ) {
+    if (!ALLOWED_MIME_TYPES.includes(dto.mimeType)) {
+      throw new BadRequestException(
+        'Tipo de arquivo não permitido. Use jpeg, png, webp ou vídeo (mp4, mov, webm, 3gp, avi, mkv).',
+      );
+    }
+
+    if (dto.size > MAX_FILE_SIZE) {
+      throw new BadRequestException('Arquivo excede o limite de 300 MB.');
+    }
+
+    await this.assertProjectAccess(projectId, userId, ['worker', 'admin']);
+
+    if (idempotencyKey) {
+      const existing = await this.prisma.projectEvidence.findFirst({
+        where: {
+          projectId,
+          uploadedBy: userId,
+          url: { contains: idempotencyKey },
+        },
+      });
+      if (existing) return existing;
+    }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from('evidences').getPublicUrl(dto.storagePath);
+
+    const latitude = this.parseOptionalFloat(dto.latitude);
+    const longitude = this.parseOptionalFloat(dto.longitude);
+    const gpsAccuracy = this.parseOptionalFloat(dto.gpsAccuracy);
+    const capturedAt = dto.capturedAt ? new Date(dto.capturedAt) : undefined;
+
+    return this.prisma.projectEvidence.create({
+      data: {
+        projectId,
+        type: dto.mimeType,
+        url: publicUrl,
+        uploadedBy: userId,
+        note: dto.note,
+        ...(latitude !== undefined && { latitude }),
+        ...(longitude !== undefined && { longitude }),
+        ...(gpsAccuracy !== undefined && { gpsAccuracy }),
+        ...(capturedAt !== undefined && !Number.isNaN(capturedAt.getTime()) && { capturedAt }),
+      },
+    });
+  }
+
   async list(projectId: string, userId: string) {
     await this.assertProjectAccess(projectId, userId, ['client', 'worker', 'admin']);
     return this.prisma.projectEvidence.findMany({

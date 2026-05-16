@@ -11,6 +11,8 @@ import {
   UseInterceptors,
   UploadedFile,
   ParseUUIDPipe,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -20,8 +22,9 @@ import {
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
-import { IsString, IsNotEmpty } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsDateString, Min, Max } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -37,6 +40,50 @@ class CreateCommentDto {
 class UpsertChecklistDto {
   @ApiProperty()
   items: ProjectChecklistItem[];
+}
+
+class RegisterProjectEvidenceDto {
+  @ApiProperty()
+  @IsString()
+  storagePath: string;
+
+  @ApiProperty()
+  @IsString()
+  mimeType: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(1)
+  @Max(300 * 1024 * 1024)
+  size: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  latitude?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  longitude?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  gpsAccuracy?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  capturedAt?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 
 @ApiTags('Project Evidence')
@@ -72,6 +119,20 @@ export class ProjectEvidenceController {
     @Body() body: any,
   ) {
     return this.service.upload(projectId, file, req.user.id, req, body);
+  }
+
+  @Post('evidences/register')
+  @Roles('worker', 'admin')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Registrar evidência já enviada ao Storage diretamente (worker)' })
+  @ApiBody({ type: RegisterProjectEvidenceDto })
+  registerEvidence(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Req() req: any,
+    @Body() dto: RegisterProjectEvidenceDto,
+  ) {
+    const idempotencyKey = req.headers?.['x-idempotency-key'] as string | undefined;
+    return this.service.register(projectId, req.user.id, dto, idempotencyKey);
   }
 
   @Get('evidences')

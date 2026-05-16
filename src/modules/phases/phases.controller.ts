@@ -29,6 +29,7 @@ import { EvidenceService } from './evidence.service';
 import { UpdatePhaseStatusDto } from './dto/update-phase-status.dto';
 import { UpdatePhaseDto } from './dto/update-phase.dto';
 import { EvidenceGpsDto } from './dto/evidence-gps.dto';
+import { RegisterEvidenceDto } from './dto/register-evidence.dto';
 import { UpdateAnnotationsDto } from './dto/update-annotations.dto';
 import { CreateEvidenceCommentDto } from './dto/create-evidence-comment.dto';
 
@@ -131,6 +132,18 @@ export class PhasesController {
     @Body() gps: EvidenceGpsDto,
   ) {
     return this.evidenceService.upload(id, file, req.user.id, req, gps ?? {});
+  }
+
+  @Post('phases/:id/evidence/register')
+  @Roles('worker')
+  @ApiOperation({ summary: 'Registrar evidência já enviada ao Storage diretamente (worker)' })
+  @ApiBody({ type: RegisterEvidenceDto })
+  registerEvidence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @Body() dto: RegisterEvidenceDto,
+  ) {
+    return this.evidenceService.register(id, req.user.id, dto, req);
   }
 
   @Patch('phase-evidence/:id/location')

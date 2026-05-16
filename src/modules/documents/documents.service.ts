@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
 import { DOCUMENT_OCR_QUEUE, type DocumentOcrJob } from './documents.constants';
+import { RegisterDocumentDto } from './dto/register-document.dto';
 
 const MAX_FILE_BYTES = 40 * 1024 * 1024;
 
@@ -137,6 +138,62 @@ export class DocumentsService {
       try {
         await this.ocrQueue.add(
           { documentId: doc.id, mimeType: file.mimetype },
+          {
+            removeOnComplete: true,
+            removeOnFail: 50,
+            attempts: 2,
+            backoff: { type: 'exponential', delay: 8000 },
+          },
+        );
+      } catch (err) {
+        console.warn('[documents] Falha ao enfileirar OCR:', err);
+      }
+    }
+
+    return this.formatDocument(doc);
+  }
+
+  async register(projectId: string, userKey: string, dto: RegisterDocumentDto) {
+    if (dto.size > MAX_FILE_BYTES) {
+      throw new BadRequestException('Ficheiro excede o limite de 40 MB.');
+    }
+
+    if (!ALLOWED_MIME.has(dto.mimeType)) {
+      throw new BadRequestException('Tipo não permitido. Use PDF, JPEG, PNG ou TIFF.');
+    }
+
+    const { userId } = await this.projectsService.ensureReportProjectAccess(projectId, userKey);
+
+    if (dto.phaseId) {
+      const phase = await this.prisma.projectPhase.findFirst({
+        where: { id: dto.phaseId, projectId },
+        select: { id: true },
+      });
+      if (!phase) {
+        throw new BadRequestException('Fase inválida para este projeto.');
+      }
+    }
+
+    const bucket = this.bucket();
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from(bucket).getPublicUrl(dto.storagePath);
+
+    const doc = await this.prisma.projectDocument.create({
+      data: {
+        projectId,
+        phaseId: dto.phaseId ?? null,
+        fileUrl: publicUrl,
+        fileName: dto.fileName.trim(),
+        type: dto.type,
+        uploadedBy: userId,
+      },
+    });
+
+    if (OCR_MIME.has(dto.mimeType)) {
+      try {
+        await this.ocrQueue.add(
+          { documentId: doc.id, mimeType: dto.mimeType },
           {
             removeOnComplete: true,
             removeOnFail: 50,

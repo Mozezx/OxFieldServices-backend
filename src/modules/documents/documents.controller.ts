@@ -29,6 +29,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { DocumentsService } from './documents.service';
 import { UploadProjectDocumentDto } from './dto/upload-project-document.dto';
+import { RegisterDocumentDto } from './dto/register-document.dto';
 
 @ApiTags('documents')
 @ApiBearerAuth()
@@ -88,6 +89,18 @@ export class DocumentsController {
       body.fileName,
       body.phaseId,
     );
+  }
+
+  @Post(':id/documents/register')
+  @Roles('client', 'worker', 'admin')
+  @ApiOperation({ summary: 'Registrar documento já enviado ao Storage diretamente' })
+  @ApiBody({ type: RegisterDocumentDto })
+  register(
+    @Param('id', ParseUUIDPipe) projectId: string,
+    @Req() req: Request,
+    @Body() dto: RegisterDocumentDto,
+  ) {
+    return this.documentsService.register(projectId, this.userKey(req), dto);
   }
 
   @Get(':id/documents')

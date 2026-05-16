@@ -426,6 +426,9 @@ model ProjectPhase {
 
   rejectionComment String?
 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   evidences       PhaseEvidence[]
   checklists      PhaseChecklist[]
   documents       ProjectDocument[]

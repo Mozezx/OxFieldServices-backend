@@ -4,6 +4,7 @@ import {
   NotFoundException,
   InternalServerErrorException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
@@ -23,6 +24,8 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/heic',
+  'image/heif',
   'video/mp4',
   'video/quicktime',
   'video/webm',
@@ -35,6 +38,7 @@ const MAX_FILE_SIZE = 300 * 1024 * 1024; // 300 MB
 
 @Injectable()
 export class EvidenceService {
+  private readonly logger = new Logger(EvidenceService.name);
   private supabase = createClient(
     process.env.SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!,
@@ -56,16 +60,23 @@ export class EvidenceService {
   ) {
     const idempotencyKey = this.extractIdempotencyKey(req);
     if (!file) {
+      this.logger.warn(`[upload] phaseId=${phaseId} userId=${userId} → arquivo ausente`);
       throw new BadRequestException('Arquivo é obrigatório.');
     }
 
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      this.logger.warn(
+        `[upload] phaseId=${phaseId} userId=${userId} → MIME rejeitado: ${file.mimetype} (${file.originalname}, ${file.size}b)`,
+      );
       throw new BadRequestException(
         'Tipo de arquivo não permitido. Use jpeg, png, webp ou vídeo (mp4, mov, webm, 3gp, avi, mkv).',
       );
     }
 
     if (file.size > MAX_FILE_SIZE) {
+      this.logger.warn(
+        `[upload] phaseId=${phaseId} userId=${userId} → arquivo grande: ${file.size}b (${file.originalname})`,
+      );
       throw new BadRequestException('Arquivo excede o limite de 300 MB.');
     }
 
@@ -79,6 +90,7 @@ export class EvidenceService {
     if (!phase) throw new NotFoundException('Fase não encontrada');
 
     if (phase.status === 'completed') {
+      this.logger.warn(`[upload] phaseId=${phaseId} userId=${userId} → fase já concluída (status=${phase.status})`);
       throw new BadRequestException(
         'Upload não permitido em fase já concluída.',
       );

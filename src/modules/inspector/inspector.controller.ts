@@ -29,6 +29,13 @@ export class InspectorController {
     return this.inspectorService.getPendingReviews();
   }
 
+  @Get('active-phases')
+  @Roles('inspector', 'admin')
+  @ApiOperation({ summary: 'Listar fases atualmente em execução pelos workers' })
+  getActivePhases() {
+    return this.inspectorService.getActivePhases();
+  }
+
   @Post('phases/:phaseId/review')
   @Roles('inspector', 'admin')
   @ApiOperation({ summary: 'Aprovar ou rejeitar uma fase (inspetor)' })

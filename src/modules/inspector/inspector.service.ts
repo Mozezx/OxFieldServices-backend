@@ -15,6 +15,52 @@ export class InspectorService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  async getActivePhases() {
+    const phases = await this.prisma.projectPhase.findMany({
+      where: {
+        status: { in: ['pending', 'in_progress'] },
+        assignedWorkerId: { not: null },
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        project: {
+          select: { id: true, title: true, location: true },
+        },
+        evidences: {
+          select: { latitude: true, longitude: true },
+          where: { latitude: { not: null } },
+          orderBy: { uploadedAt: 'desc' },
+          take: 1,
+        },
+        assignedWorker: {
+          select: {
+            id: true,
+            user: { select: { name: true, avatarUrl: true } },
+          },
+        },
+      },
+    });
+
+    const statusOrder = (s: string) => (s === 'in_progress' ? 0 : 1);
+    phases.sort((a, b) => statusOrder(a.status) - statusOrder(b.status));
+
+    return phases.map((phase) => {
+      const evidence = phase.evidences[0];
+      return {
+        id: phase.id,
+        phaseName: phase.name,
+        projectName: phase.project.title,
+        workerName: phase.assignedWorker?.user?.name ?? null,
+        workerAvatar: phase.assignedWorker?.user?.avatarUrl ?? null,
+        status: phase.status,
+        startedAt: phase.updatedAt,
+        latitude: evidence?.latitude ?? null,
+        longitude: evidence?.longitude ?? null,
+        address: phase.project.location ?? null,
+      };
+    });
+  }
+
   async getPendingReviews() {
     const phases = await this.prisma.projectPhase.findMany({
       where: { status: 'under_review' },

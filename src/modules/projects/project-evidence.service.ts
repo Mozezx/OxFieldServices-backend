@@ -14,6 +14,8 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/heic',
+  'image/heif',
   'video/mp4',
   'video/quicktime',
   'video/webm',

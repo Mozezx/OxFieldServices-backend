@@ -41,12 +41,31 @@ function isAllowedCorsOrigin(origin: string): boolean {
   return false;
 }
 
+// Supabase Realtime (phoenix.cjs.js) lança TypeError em setTimeout quando o WebSocket
+// não está estabelecido no momento do disconnect. Sem este handler, o processo crasharia.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException] Erro não capturado — processo continua:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection] Rejeição não tratada — processo continua:', reason);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
 
   app.use(compression());
+
+  // Middleware de diagnóstico: loga tamanho e MIME de uploads
+  app.use((req: any, _res: any, next: any) => {
+    if (req.method === 'POST' && /evidence|document/.test(req.url)) {
+      const len = req.headers['content-length'] ?? '?';
+      const ct = req.headers['content-type'] ?? '?';
+      console.log(`[upload-req] ${req.method} ${req.url} | size=${len}b | ct=${ct.slice(0, 80)}`);
+    }
+    next();
+  });
 
   app.enableCors({
     // Apps móveis costumam não enviar Origin; Flutter web / LAN usam 192.168.x ou 10.x.
